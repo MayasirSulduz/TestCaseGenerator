@@ -1,0 +1,231 @@
+import React, { useState } from 'react';
+import './TestGenerator.css';
+
+const TestGenerator = () => {
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [sourceCode, setSourceCode] = useState('');
+  const [language, setLanguage] = useState('');
+  const [framework, setFramework] = useState('Jest');
+  const [availableFrameworks, setAvailableFrameworks] = useState(['Jest']);
+  const [coverageTarget, setCoverageTarget] = useState(80);
+  const [generatedTests, setGeneratedTests] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [coverageReport, setCoverageReport] = useState(null);
+
+  const handleFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setSelectedFile(file);
+    setLoading(true);
+    setError('');
+
+    try {
+      const text = await file.text();
+      setSourceCode(text);
+
+      const res = await fetch('http://localhost:5000/api/detect-framework', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name })
+      });
+
+      const data = await res.json();
+      if (data.status === 'success') {
+        setLanguage(data.language);
+        setFramework(data.framework);
+        setAvailableFrameworks(data.availableFrameworks);
+        setSuccess(`Detected ${data.language} (${data.framework})`);
+        setTimeout(() => setSuccess(''), 3000);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGenerateTests = async () => {
+    if (!sourceCode) return setError('Upload a file first');
+
+    setLoading(true);
+    setGeneratedTests('');
+    setCoverageReport(null);
+
+    try {
+      const res = await fetch('http://localhost:5000/api/generate-tests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: sourceCode,
+          language,
+          framework,
+          coverageTarget,
+          filename: selectedFile.name.split('.')[0]
+        })
+      });
+
+      const result = await res.json();
+      if (result.status === 'success') {
+        setGeneratedTests(result.tests);
+        setCoverageReport(result.coverageReport);
+        setSuccess('Test cases generated successfully');
+      } else {
+        setError(result.message);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="test-generator">
+      <h1 className="title">🤖 AI Test Case Generator</h1>
+
+      <div className="layout-grid">
+        {/* LEFT PANEL */}
+        <div className="left-panel">
+          <div className="upload-section">
+            <input type="file" onChange={handleFileSelect} />
+            {selectedFile && (
+              <div className="file-info">{selectedFile.name}</div>
+            )}
+          </div>
+
+          {selectedFile && (
+            <>
+              <div className="control-group">
+                <label className="control-label">Framework</label>
+                <select value={framework} onChange={e => setFramework(e.target.value)}>
+                  {availableFrameworks.map(fw => (
+                    <option key={fw}>{fw}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="control-group">
+                <label className="control-label">
+                  Coverage Target
+                </label>
+                <input
+                  type="range"
+                  min="50"
+                  max="100"
+                  value={coverageTarget}
+                  onChange={e => setCoverageTarget(e.target.value)}
+                />
+                <div className="coverage-value">{coverageTarget}%</div>
+              </div>
+
+              <button
+                className="btn-generate"
+                onClick={handleGenerateTests}
+                disabled={loading}
+              >
+                {loading ? 'Generating...' : 'Generate Tests'}
+              </button>
+            </>
+          )}
+
+          {!selectedFile && (
+            <div className="welcome-box">
+              Upload a file to begin test generation
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT PANEL */}
+        <div className="right-panel">
+          {loading && (
+            <div className="loading-overlay">
+              <div className="spinner" />
+              Generating tests & coverage...
+            </div>
+          )}
+
+          {error && (
+            <div className="alert error">
+              {error}
+              <button className="close-btn" onClick={() => setError('')}>✕</button>
+            </div>
+          )}
+
+          {success && (
+            <div className="alert success">{success}</div>
+          )}
+
+          {!generatedTests && !loading && (
+            <div className="placeholder">
+              Generated test cases will appear here
+            </div>
+          )}
+
+          {generatedTests && (
+            <div className="results-section">
+              <h3>Generated Tests</h3>
+              <pre>{generatedTests}</pre>
+
+              {coverageReport && (
+                <div className="coverage-section">
+                  <h3>Coverage Report</h3>
+
+                  <div className="coverage-card">
+                    Run Command:
+                    <div className="run-command">
+                      {coverageReport.runCommand}
+                    </div>
+                  </div>
+
+                  <div
+                    className="coverage-badge"
+                    style={{
+                      background:
+                        coverageReport.totalCoverage >= 80
+                          ? '#28a745'
+                          : coverageReport.totalCoverage >= 60
+                          ? '#ffc107'
+                          : '#dc3545'
+                    }}
+                  >
+                    {coverageReport.totalCoverage}%
+                  </div>
+
+                  {coverageReport.summaryTable && (
+                    <div className="coverage-table">
+                      <pre>{coverageReport.summaryTable}</pre>
+                    </div>
+                  )}
+
+                  {coverageReport.missingLines && (
+                    <div className="coverage-detail">
+                      <span className="missing-lines">
+                        {coverageReport.missingLines}
+                      </span>
+                    </div>
+                  )}
+
+                  {coverageReport.suggestions?.length > 0 && (
+                    <div className="suggestions-box">
+                      <strong>Suggestions</strong>
+                      <ul>
+                        {coverageReport.suggestions.map((s, i) => (
+                          <li key={i}>{s}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default TestGenerator;

@@ -1,0 +1,24 @@
+{
+  "name": "testcasegenerator",
+  "version": "1.0.0",
+  "description": "AI-Powered Test Case Generator",
+  "scripts": {
+    "frontend": "cd frontend && npm run dev",
+    "backend": "cd backend && python app.py",
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "install-frontend": "cd frontend && npm install",
+    "install-backend": "cd backend && pip install -r requirements.txt",
+    "install-all": "npm run install-frontend && npm run install-backend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "jest": "^30.2.0"
+  },
+  "keywords": [
+    "test-generator",
+    "ai",
+    "gemini"
+  ],
+  "author": "",
+  "license": "MIT"
+}
