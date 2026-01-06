@@ -239,6 +239,7 @@ select:focus {
   font-family: monospace;
   font-size: 0.85rem;
   margin-top: 0.5rem;
+  width: 50%;
 }
 
 /* Badge */
@@ -250,6 +251,7 @@ select:focus {
   border-radius: 14px;
   color: white;
   margin-bottom: 1.5rem;
+  width: fit-content;
 }
 
 /* Table */
@@ -266,6 +268,8 @@ select:focus {
   color: #991b1b;
   padding: 0.4rem 0.7rem;
   border-radius: 6px;
+  display: inline-block;
+  width: 80%;
 }
 
 /* Suggestions */
