@@ -1678,7 +1678,6 @@
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
@@ -1714,7 +1713,7 @@ MAX_ITERATIONS = 3
 DEPENDENCY_MAP = {
     "Python": {
         "pytest": ["pytest", "pytest-cov"],
-        "unittest": [],  # Built-in
+        "unittest": [],
         "nose2": ["nose2", "coverage"]
     },
     "JavaScript": {
@@ -1745,42 +1744,36 @@ def check_runtime_environment():
         'mvn': False
     }
     
-    # Check Python
     try:
         result = subprocess.run([sys.executable, '--version'], capture_output=True, timeout=5)
         environments['python'] = result.returncode == 0
     except:
         pass
     
-    # Check Node.js
     try:
         result = subprocess.run(['node', '--version'], capture_output=True, timeout=5)
         environments['node'] = result.returncode == 0
     except:
         pass
     
-    # Check npm
     try:
         result = subprocess.run(['npm', '--version'], capture_output=True, timeout=5)
         environments['npm'] = result.returncode == 0
     except:
         pass
     
-    # Check Java
     try:
         result = subprocess.run(['java', '-version'], capture_output=True, timeout=5)
         environments['java'] = result.returncode == 0
     except:
         pass
     
-    # Check javac
     try:
         result = subprocess.run(['javac', '-version'], capture_output=True, timeout=5)
         environments['javac'] = result.returncode == 0
     except:
         pass
     
-    # Check Maven
     try:
         result = subprocess.run(['mvn', '--version'], capture_output=True, timeout=5)
         environments['mvn'] = result.returncode == 0
@@ -1897,7 +1890,6 @@ def install_package(package_name, language="Python"):
                 print(f"✗ Failed to install {package_name}: {result.stderr}")
                 return False
         elif language == "Java":
-            # For Java, we'll handle Maven dependencies differently
             print(f"✓ Java dependency {package_name} will be added to pom.xml")
             return True
     except subprocess.TimeoutExpired:
@@ -1914,7 +1906,6 @@ def ensure_dependencies(language, framework):
     print(f"Checking dependencies for {language} - {framework}")
     print(f"{'='*60}")
     
-    # Check runtime environment first
     env = check_runtime_environment()
     
     if language in ["JavaScript", "TypeScript"]:
@@ -1947,7 +1938,6 @@ def ensure_dependencies(language, framework):
     all_installed = True
     
     for package in required_packages:
-        # Check if package is already installed
         if language == "Python":
             try:
                 package_import_name = package.replace("-", "_").split("[")[0]
@@ -1975,11 +1965,9 @@ def ensure_dependencies(language, framework):
             except:
                 pass
         elif language == "Java":
-            # For Java, we'll just note the dependencies
             print(f"✓ {package} will be managed by Maven")
             continue
         
-        # Package not found, install it
         print(f"✗ {package} not found, installing...")
         success = install_package(package, language)
         if not success:
@@ -1991,6 +1979,7 @@ def ensure_dependencies(language, framework):
 
 
 def call_groq_api(prompt, model=None, max_tokens=4096):
+    """Call Groq API for LLM-based test generation"""
     if not GROQ_API_KEY:
         print("ERROR: GROQ_API_KEY not set!")
         return None
@@ -2039,7 +2028,7 @@ def extract_code_from_markdown(text):
 
 
 def fix_imports_in_test_code(test_code, correct_module_name):
-    """Fix common import mistakes"""
+    """Fix common import mistakes in Python test code"""
     wrong_patterns = [
         r'from your_module import',
         r'from module import',
@@ -2066,7 +2055,7 @@ def fix_imports_in_test_code(test_code, correct_module_name):
 
 
 def check_dependencies():
-    """Check if testing tools are installed"""
+    """Check if Python testing tools are installed"""
     try:
         result = subprocess.run(['pytest', '--version'], capture_output=True, timeout=5)
         pytest_available = result.returncode == 0
@@ -2079,9 +2068,9 @@ def check_dependencies():
 
 
 def run_python_coverage(source_code, test_code, filename):
-    """Run pytest with coverage"""
+    """Run pytest with coverage for Python code"""
     print("\n" + "="*60)
-    print("STARTING COVERAGE ANALYSIS")
+    print("STARTING PYTHON COVERAGE ANALYSIS")
     print("="*60)
     
     temp_dir = tempfile.mkdtemp()
@@ -2101,7 +2090,6 @@ def run_python_coverage(source_code, test_code, filename):
         
         print(f"Writing tests to: {test_filename}")
         
-        # Add mock setup for missing dependencies
         mock_setup = """# Mock setup for missing dependencies
 import sys
 from unittest.mock import MagicMock
@@ -2298,7 +2286,6 @@ def run_javascript_coverage(source_code, test_code, filename, framework):
         with open(test_path, 'w', encoding='utf-8') as f:
             f.write(test_code)
         
-        # Create package.json
         package_json = {
             "name": "test-coverage",
             "version": "1.0.0",
@@ -2319,7 +2306,7 @@ def run_javascript_coverage(source_code, test_code, filename, framework):
         
         if framework == "Jest":
             cmd = ["npx", "jest", "--coverage", "--json", "--outputFile=coverage-summary.json"]
-        else:  # Mocha with NYC
+        else:
             cmd = ["npx", "nyc", "--reporter=json", "--reporter=text", "mocha", test_filename]
         
         print(f"Running: {' '.join(cmd)}")
@@ -2332,8 +2319,7 @@ def run_javascript_coverage(source_code, test_code, filename, framework):
             print(result.stderr)
         print(f"\nReturn code: {result.returncode}")
         
-        # Parse coverage
-        coverage_json_path = os.path.join(temp_dir, 'coverage', 'coverage-summary.json') if framework == "Jest" else os.path.join(temp_dir, 'coverage', 'coverage-summary.json')
+        coverage_json_path = os.path.join(temp_dir, 'coverage', 'coverage-summary.json')
         
         if os.path.exists(coverage_json_path):
             print("Found coverage JSON")
@@ -2365,7 +2351,6 @@ def run_javascript_coverage(source_code, test_code, filename, framework):
                     'stderr': result.stderr
                 }
         
-        # Try parsing from text output
         coverage_match = re.search(r'All files.*?(\d+\.?\d*)\s*\|', result.stdout, re.DOTALL)
         if coverage_match:
             coverage_percent = float(coverage_match.group(1))
@@ -2395,24 +2380,622 @@ def run_javascript_coverage(source_code, test_code, filename, framework):
         shutil.rmtree(temp_dir, ignore_errors=True)
         print("="*60 + "\n")
 
+
+def run_typescript_coverage(source_code, test_code, filename, framework):
+    """Run TypeScript tests with coverage"""
+    print("\n" + "="*60)
+    print(f"STARTING TYPESCRIPT COVERAGE ANALYSIS ({framework})")
+    print("="*60)
+    
+    temp_dir = tempfile.mkdtemp()
+    print(f"Created temp directory: {temp_dir}")
+    
+    try:
+        base_filename = filename.replace('.ts', '').replace('.tsx', '')
+        source_filename = f"{base_filename}.ts"
+        test_filename = f"{base_filename}.test.ts"
+        
+        source_path = os.path.join(temp_dir, source_filename)
+        test_path = os.path.join(temp_dir, test_filename)
+        
+        with open(source_path, 'w', encoding='utf-8') as f:
+            f.write(source_code)
+        
+        with open(test_path, 'w', encoding='utf-8') as f:
+            f.write(test_code)
+        
+        tsconfig = {
+            "compilerOptions": {
+                "target": "ES2020",
+                "module": "commonjs",
+                "strict": True,
+                "esModuleInterop": True,
+                "skipLibCheck": True
+            }
+        }
+        
+        with open(os.path.join(temp_dir, 'tsconfig.json'), 'w') as f:
+            json.dump(tsconfig, f, indent=2)
+        
+        package_json = {
+            "name": "test-coverage-ts",
+            "version": "1.0.0",
+            "scripts": {
+                "test": "jest --coverage" if framework == "Jest" else "nyc mocha -r ts-node/register"
+            }
+        }
+        
+        if framework == "Jest":
+            package_json["jest"] = {
+                "preset": "ts-jest",
+                "testEnvironment": "node",
+                "coverageDirectory": "coverage",
+                "collectCoverageFrom": [f"{source_filename}"]
+            }
+        
+        with open(os.path.join(temp_dir, 'package.json'), 'w') as f:
+            json.dump(package_json, f, indent=2)
+        
+        if framework == "Jest":
+            cmd = ["npx", "jest", "--coverage", "--json", "--outputFile=coverage-summary.json"]
+        else:
+            cmd = ["npx", "nyc", "--reporter=json", "--reporter=text", "mocha", "-r", "ts-node/register", test_filename]
+        
+        print(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, cwd=temp_dir, capture_output=True, text=True, timeout=60)
+        
+        print("\nSTDOUT:")
+        print(result.stdout)
+        
+        coverage_json_path = os.path.join(temp_dir, 'coverage', 'coverage-summary.json')
+        
+        if os.path.exists(coverage_json_path):
+            with open(coverage_json_path, 'r') as f:
+                coverage_data = json.load(f)
+            
+            file_coverage = coverage_data.get('total', {})
+            coverage_percent = file_coverage.get('lines', {}).get('pct', 0)
+            
+            return {
+                'success': True,
+                'coverage': round(coverage_percent, 1),
+                'missing_lines': "See coverage report",
+                'coverage_table': result.stdout,
+                'test_passed': result.returncode == 0,
+                'stdout': result.stdout
+            }
+        
+        coverage_match = re.search(r'All files.*?(\d+\.?\d*)\s*\|', result.stdout, re.DOTALL)
+        if coverage_match:
+            coverage_percent = float(coverage_match.group(1))
+            return {
+                'success': True,
+                'coverage': coverage_percent,
+                'missing_lines': "See coverage report",
+                'coverage_table': result.stdout,
+                'test_passed': result.returncode == 0
+            }
+        
+        return {'success': False, 'error': 'Could not parse coverage', 'stdout': result.stdout}
+    
+    except Exception as e:
+        print(f"Exception: {e}")
+        return {'success': False, 'error': str(e)}
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        print("="*60 + "\n")
+
+
+def run_java_coverage(source_code, test_code, filename, framework):
+    """Run Java tests with JaCoCo coverage"""
+    print("\n" + "="*60)
+    print(f"STARTING JAVA COVERAGE ANALYSIS ({framework})")
+    print("="*60)
+    
+    temp_dir = tempfile.mkdtemp()
+    print(f"Created temp directory: {temp_dir}")
+    
+    try:
+        class_match = re.search(r'public\s+class\s+(\w+)', source_code)
+        class_name = class_match.group(1) if class_match else filename.replace('.java', '')
+        
+        test_class_name = f"{class_name}Test"
+        
+        src_main_java = os.path.join(temp_dir, 'src', 'main', 'java')
+        src_test_java = os.path.join(temp_dir, 'src', 'test', 'java')
+        os.makedirs(src_main_java, exist_ok=True)
+        os.makedirs(src_test_java, exist_ok=True)
+        
+        source_path = os.path.join(src_main_java, f"{class_name}.java")
+        test_path = os.path.join(src_test_java, f"{test_class_name}.java")
+        
+        with open(source_path, 'w', encoding='utf-8') as f:
+            f.write(source_code)
+        
+        with open(test_path, 'w', encoding='utf-8') as f:
+            f.write(test_code)
+        
+        junit_version = "5.10.1" if framework == "JUnit5" else "4.13.2"
+        junit_dependency = f"""
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>{junit_version}</version>
+            <scope>test</scope>
+        </dependency>
+""" if framework == "JUnit5" else f"""
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>{junit_version}</version>
+            <scope>test</scope>
+        </dependency>
+"""
+        
+        pom_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    
+    <groupId>com.test</groupId>
+    <artifactId>coverage-test</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+    
+    <dependencies>
+{junit_dependency}
+    </dependencies>
+    
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.0.0</version>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.11</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+"""
+        
+        with open(os.path.join(temp_dir, 'pom.xml'), 'w') as f:
+            f.write(pom_xml)
+        
+        print("Running: mvn clean test")
+        result = subprocess.run(
+            ["mvn", "clean", "test"],
+            cwd=temp_dir,
+            capture_output=True,
+            text=True,
+            timeout=180
+        )
+        
+        print("\nSTDOUT:")
+        print(result.stdout[-2000:])
+        
+        jacoco_xml = os.path.join(temp_dir, 'target', 'site', 'jacoco', 'jacoco.xml')
+        
+        if os.path.exists(jacoco_xml):
+            print("Found JaCoCo report")
+            import xml.etree.ElementTree as ET
+            tree = ET.parse(jacoco_xml)
+            root = tree.getroot()
+            
+            for counter in root.findall('.//counter[@type="LINE"]'):
+                covered = int(counter.get('covered', 0))
+                missed = int(counter.get('missed', 0))
+                total = covered + missed
+                coverage_percent = (covered / total * 100) if total > 0 else 0
+                
+                return {
+                    'success': True,
+                    'coverage': round(coverage_percent, 1),
+                    'missing_lines': f"{missed} lines missed",
+                    'coverage_table': f"Lines: {covered}/{total} ({coverage_percent:.1f}%)",
+                    'test_passed': result.returncode == 0,
+                    'stdout': result.stdout
+                }
+        
+        return {
+            'success': False,
+            'error': 'JaCoCo report not found',
+            'stdout': result.stdout,
+            'stderr': result.stderr
+        }
+    
+    except Exception as e:
+        print(f"Exception: {e}")
+        print(traceback.format_exc())
+        return {'success': False, 'error': str(e)}
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        print("="*60 + "\n")
+
+
+@app.route("/api/generate-tests", methods=["POST", "OPTIONS"])
+def generate_tests():
+    """Main endpoint for generating tests with coverage analysis"""
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+    
+    try:
+        data = request.json or {}
+        source_code = data.get("code", "").strip()
+        language = data.get("language", "JavaScript")
+        framework = data.get("framework", "Jest")
+        coverage_target = data.get("coverageTarget", 80)
+        filename = data.get("filename", "app")
+        
+        if not source_code:
+            return jsonify({"status": "error", "message": "No source code provided"}), 400
+        
+        print(f"\n{'='*60}")
+        print(f"Target Coverage: {coverage_target}%")
+        print(f"Language: {language} | Framework: {framework}")
+        print(f"Filename: {filename}")
+        print(f"{'='*60}\n")
+        
+        deps_installed = ensure_dependencies(language, framework)
+        if not deps_installed:
+            return jsonify({
+                "status": "error",
+                "message": f"Required runtime environment for {language} not found. Check server logs for installation guide."
+            }), 500
+        
+        can_analyze_coverage = language in ["Python", "JavaScript", "TypeScript", "Java"]
+        
+        if not can_analyze_coverage:
+            print(f"Coverage analysis not available for {language}")
+        
+        if can_analyze_coverage and language == "Python":
+            deps = check_dependencies()
+            print(f"Dependencies: {deps}")
+            if not deps.get('pytest'):
+                print("pytest not available, attempting one more install...")
+                install_package("pytest", "Python")
+                install_package("pytest-cov", "Python")
+                deps = check_dependencies()
+                if not deps.get('pytest'):
+                    print("pytest still not available, coverage analysis will be skipped")
+                    can_analyze_coverage = False
+        
+        module_name = filename.replace('.py', '').replace('.java', '').replace('.js', '').replace('.ts', '').replace('-', '_')
+        
+        prompt = f"""Generate comprehensive unit tests using {framework} for {language}.
+
+Target Coverage: {coverage_target}%
+
+Source Code (filename: {filename}):
+```{language.lower()}
+{source_code}
+```
+
+CRITICAL REQUIREMENTS:
+1. For Python: The import statement MUST be: from {module_name} import *
+2. For Java: Match the class names exactly from the source code
+3. For JavaScript/TypeScript: Use proper module imports/exports
+4. Write tests that cover ALL functions, methods, classes, and branches
+5. Include edge cases, error handling, and boundary conditions
+6. Use descriptive test names following {framework} conventions
+7. Mock external dependencies if needed
+8. Return ONLY the test code, no markdown formatting, no explanations
+
+IMPORTANT: The module/class name is "{module_name}" - use this exact name in imports!
+
+Generate the complete test file:
+"""
+        
+        print("Calling Groq API for initial test generation...")
+        test_code = call_groq_api(prompt, max_tokens=6000)
+        
+        if not test_code:
+            return jsonify({"status": "error", "message": "LLM failed to generate tests"}), 500
+        
+        test_code = extract_code_from_markdown(test_code)
+        if language == "Python":
+            test_code = fix_imports_in_test_code(test_code, module_name)
+        
+        print(f"Generated {len(test_code)} characters of test code")
+        if language == "Python":
+            print(f"Fixed imports to use module: {module_name}")
+        
+        first_lines = '\n'.join(test_code.split('\n')[:10])
+        print(f"First lines of test code:\n{first_lines}\n")
+        
+        coverage_result = None
+        iteration = 1
+        
+        if can_analyze_coverage:
+            while iteration <= MAX_ITERATIONS:
+                print(f"\n{'='*60}")
+                print(f"Iteration {iteration}/{MAX_ITERATIONS}: Running coverage analysis...")
+                print(f"{'='*60}")
+                
+                if language == "Python":
+                    coverage_result = run_python_coverage(source_code, test_code, filename)
+                elif language == "JavaScript":
+                    coverage_result = run_javascript_coverage(source_code, test_code, filename, framework)
+                elif language == "TypeScript":
+                    coverage_result = run_typescript_coverage(source_code, test_code, filename, framework)
+                elif language == "Java":
+                    coverage_result = run_java_coverage(source_code, test_code, filename, framework)
+                else:
+                    coverage_result = {'success': False, 'error': f'Coverage not supported for {language}'}
+                
+                if not coverage_result.get('success'):
+                    error_msg = coverage_result.get('error', 'Unknown error')
+                    print(f"Coverage analysis failed: {error_msg}")
+                    
+                    if 'stdout' in coverage_result:
+                        print(f"Debug - stdout: {coverage_result['stdout'][:500]}")
+                    if 'stderr' in coverage_result:
+                        print(f"Debug - stderr: {coverage_result['stderr'][:500]}")
+                    
+                    break
+                
+                current_coverage = coverage_result['coverage']
+                print(f"Current Coverage: {current_coverage}%")
+                
+                if current_coverage >= coverage_target:
+                    print(f"Target coverage {coverage_target}% achieved!")
+                    break
+                
+                if iteration < MAX_ITERATIONS:
+                    print(f"Coverage {current_coverage}% < {coverage_target}%. Generating more tests...")
+                    
+                    missing_lines = coverage_result.get('missing_lines', 'Unknown')
+                    
+                    improve_prompt = f"""The current test coverage is {current_coverage}%, but we need {coverage_target}%.
+
+Missing/Uncovered Lines: {missing_lines}
+
+Source Code (filename: {filename}):
+```{language.lower()}
+{source_code}
+```
+
+Current Tests:
+```{language.lower()}
+{test_code}
+```
+
+CRITICAL: For Python - Your imports MUST use: from {module_name} import *
+
+Generate ADDITIONAL test cases to cover the missing lines.
+
+Requirements:
+- For Python: Use the correct import: from {module_name} import *
+- Focus on lines: {missing_lines}
+- Add new test functions (don't duplicate existing ones)
+- Test edge cases, error paths, and boundary conditions
+- Mock external dependencies if needed
+- Return ONLY the COMPLETE test file with ALL tests (existing + new)
+
+Generate the improved test file:
+"""
+                    
+                    print("Generating additional tests...")
+                    improved_tests = call_groq_api(improve_prompt, max_tokens=6000)
+                    
+                    if improved_tests:
+                        test_code = extract_code_from_markdown(improved_tests)
+                        if language == "Python":
+                            test_code = fix_imports_in_test_code(test_code, module_name)
+                        print(f"Updated test code ({len(test_code)} chars)")
+                    else:
+                        print("Failed to generate additional tests")
+                        break
+                else:
+                    print(f"Max iterations ({MAX_ITERATIONS}) reached")
+                
+                iteration += 1
+        
+        if coverage_result and coverage_result.get('success'):
+            final_coverage = coverage_result['coverage']
+            
+            if language == "Python":
+                base_name = filename.replace('.py', '')
+                run_command = f"python -m pytest test_{base_name}.py --cov={base_name} --cov-report=term-missing"
+            elif language == "JavaScript":
+                if framework == "Jest":
+                    run_command = f"npx jest {filename}.test.js --coverage"
+                else:
+                    run_command = f"npx nyc mocha {filename}.test.js"
+            elif language == "TypeScript":
+                if framework == "Jest":
+                    run_command = f"npx jest {filename}.test.ts --coverage"
+                else:
+                    run_command = f"npx nyc mocha -r ts-node/register {filename}.test.ts"
+            elif language == "Java":
+                run_command = "mvn clean test"
+            else:
+                run_command = f"{framework.lower()} --coverage"
+            
+            coverage_report = {
+                "totalCoverage": final_coverage,
+                "runCommand": run_command,
+                "summaryTable": coverage_result.get('coverage_table', 'N/A'),
+                "missingLines": coverage_result.get('missing_lines', 'None'),
+                "suggestions": generate_suggestions(final_coverage, coverage_target),
+                "testPassed": coverage_result.get('test_passed', False)
+            }
+            
+            print(f"\nFINAL RESULTS:")
+            print(f"   Coverage: {final_coverage}%")
+            print(f"   Target: {coverage_target}%")
+            print(f"   Tests Passed: {coverage_result.get('test_passed')}")
+        else:
+            if can_analyze_coverage and coverage_result:
+                error_detail = coverage_result.get('error', 'Unknown error')
+            else:
+                error_detail = f"Coverage analysis not available for {language}"
+            
+            coverage_report = {
+                "totalCoverage": 0,
+                "runCommand": f"Coverage analysis unavailable - {error_detail}",
+                "summaryTable": f"Error: {error_detail}",
+                "missingLines": "N/A",
+                "suggestions": [
+                    "Dependencies should be auto-installed, but manual installation may be needed",
+                    f"For Python: pip install pytest pytest-cov",
+                    f"For JavaScript: npm install --save-dev jest (or mocha chai nyc)",
+                    f"For TypeScript: npm install --save-dev jest ts-jest (or mocha nyc ts-node)",
+                    f"For Java: Install Java JDK and Maven",
+                    "Verify the source code has no syntax errors",
+                    "Check that all imports in tests are correct"
+                ]
+            }
+        
+        return jsonify({
+            "status": "success",
+            "tests": test_code.strip(),
+            "coverageReport": coverage_report
+        })
+    
+    except Exception as e:
+        print(f"\nFATAL ERROR:")
+        print(traceback.format_exc())
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+def generate_suggestions(current_coverage, target_coverage):
+    """Generate suggestions based on coverage gap"""
+    suggestions = []
+    
+    if current_coverage >= target_coverage:
+        suggestions.append(f"✓ Target coverage {target_coverage}% achieved!")
+        suggestions.append("Consider adding integration tests for real-world scenarios")
+        suggestions.append("Review test quality and add more assertions")
+    else:
+        gap = target_coverage - current_coverage
+        suggestions.append(f"Need {gap:.1f}% more coverage to reach {target_coverage}%")
+        suggestions.append("Focus on uncovered branches and edge cases")
+        suggestions.append("Test error handling and exception paths")
+        suggestions.append("Add tests for boundary conditions")
+    
+    return suggestions
+
+
+@app.route("/api/health", methods=["GET"])
+def health_check():
+    """Health check endpoint"""
+    deps = check_dependencies()
+    env = check_runtime_environment()
+    return jsonify({
+        "status": "success",
+        "api_key_set": bool(GROQ_API_KEY),
+        "model": DEFAULT_MODEL,
+        "dependencies": deps,
+        "runtime_environment": env
+    })
+
+
+@app.route("/api/detect-framework", methods=["POST", "OPTIONS"])
+def detect_framework():
+    """Detect framework and language based on filename"""
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+    
+    data = request.json or {}
+    filename = data.get("filename", "")
+    ext = filename.split(".")[-1].lower()
+
+    framework_map = {
+        "js": "Jest", "jsx": "Jest",
+        "ts": "Jest", "tsx": "Jest",
+        "py": "pytest",
+        "java": "JUnit5"
+    }
+
+    language_map = {
+        "js": "JavaScript", "jsx": "JavaScript",
+        "ts": "TypeScript", "tsx": "TypeScript",
+        "py": "Python",
+        "java": "Java"
+    }
+
+    available_frameworks_map = {
+        "JavaScript": ["Jest", "Mocha", "Jasmine"],
+        "TypeScript": ["Jest", "Mocha", "Jasmine"],
+        "Python": ["pytest", "unittest", "nose2"],
+        "Java": ["JUnit5", "JUnit4"]
+    }
+
+    detected_language = language_map.get(ext, "JavaScript")
+    detected_framework = framework_map.get(ext, "Jest")
+    available = available_frameworks_map.get(detected_language, [detected_framework])
+
+    return jsonify({
+        "status": "success",
+        "framework": detected_framework,
+        "language": detected_language,
+        "extension": ext,
+        "availableFrameworks": available
+    })
+
+
 if __name__ == "__main__":
     port = int(os.getenv("FLASK_PORT", 5000))
     
     print("\n" + "="*60)
-    print("Flask Server Starting")
+    print("Flask Server Starting - Multi-Language Test Generator")
     print("="*60)
     print(f"Port: {port}")
     print(f"CORS: http://localhost:5173")
-    print(f"Groq API Key: {'Set' if GROQ_API_KEY else 'Missing'}")
+    print(f"Groq API Key: {'✓ Set' if GROQ_API_KEY else '✗ Missing'}")
     
-    # Auto-install Python testing dependencies on startup
+    print("\nChecking Runtime Environments...")
+    env = check_runtime_environment()
+    print(f"   Python: {'✓' if env['python'] else '✗'}")
+    print(f"   Node.js: {'✓' if env['node'] else '✗'}")
+    print(f"   npm: {'✓' if env['npm'] else '✗'}")
+    print(f"   Java: {'✓' if env['java'] else '✗'}")
+    print(f"   javac: {'✓' if env['javac'] else '✗'}")
+    print(f"   Maven: {'✓' if env['mvn'] else '✗'}")
+    
     print("\nChecking and installing Python testing dependencies...")
     ensure_dependencies("Python", "pytest")
     
     deps = check_dependencies()
-    print(f"\nDependencies:")
+    print(f"\nPython Test Dependencies:")
     print(f"   pytest: {'✓' if deps.get('pytest') else '✗'}")
     print(f"   coverage: {'✓' if deps.get('coverage') else '✗'}")
+    
+    if not env['node'] or not env['npm']:
+        print("\n⚠ WARNING: Node.js/npm not found - JavaScript/TypeScript coverage will not work")
+        print("   Install from: https://nodejs.org/")
+    
+    if not env['java'] or not env['javac'] or not env['mvn']:
+        print("\n⚠ WARNING: Java/Maven not found - Java coverage will not work")
+        print("   Install Java JDK and Maven")
+    
+    print("\nSupported Languages: Python, JavaScript, TypeScript, Java")
     print("="*60 + "\n")
     
     app.run(host="0.0.0.0", port=port, debug=True)
