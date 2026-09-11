@@ -4,10 +4,10 @@
   "description": "AI-Powered Test Case Generator",
   "scripts": {
     "frontend": "cd frontend && npm run dev",
-    "backend": "cd backend && python app.py",
+    "backend": "cd backend && npm run dev",
     "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
     "install-frontend": "cd frontend && npm install",
-    "install-backend": "cd backend && pip install -r requirements.txt",
+    "install-backend": "cd backend && npm install",
     "install-all": "npm run install-frontend && npm run install-backend"
   },
   "devDependencies": {

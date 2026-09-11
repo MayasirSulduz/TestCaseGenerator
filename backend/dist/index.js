@@ -1,0 +1,26 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const app_1 = require("./app");
+const env_config_1 = require("./config/env.config");
+const systemEnv_1 = require("./utils/systemEnv");
+const app = (0, app_1.createApp)();
+const port = env_config_1.envConfig.port;
+console.log('\n' + '='.repeat(60));
+console.log('Node.js TypeScript Server Starting - Multi-Language Test Generator');
+console.log('='.repeat(60));
+console.log(`Port: ${port}`);
+console.log(`CORS Allowed Origins: ${env_config_1.envConfig.corsOrigins.join(', ')}`);
+console.log(`Groq API Key: ${env_config_1.envConfig.groqApiKey ? '✓ Set' : '✗ Missing'}`);
+console.log('\nChecking Runtime Environments...');
+const env = (0, systemEnv_1.checkRuntimeEnvironment)();
+console.log(`   Python: ${env.python ? '✓' : '✗'}`);
+console.log(`   Node.js: ${env.node ? '✓' : '✗'}`);
+console.log(`   npm: ${env.npm ? '✓' : '✗'}`);
+console.log(`   Java: ${env.java ? '✓' : '✗'}`);
+console.log(`   javac: ${env.javac ? '✓' : '✗'}`);
+console.log(`   Maven: ${env.mvn ? '✓' : '✗'}`);
+console.log('\nSupported Languages: Python, JavaScript, TypeScript, Java');
+console.log('='.repeat(60) + '\n');
+app.listen(port, () => {
+    console.log(`🚀 Server successfully listening on http://localhost:${port}`);
+});
