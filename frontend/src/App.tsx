@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Toaster } from 'sonner';
 import {
   Activity,
   AlertCircle,
@@ -147,4 +148,24 @@ const App: React.FC = () => {
   );
 };
 
-export default App;
+// Wrap with Toaster provider
+const AppWithToaster: React.FC = () => (
+  <>
+    <Toaster
+      richColors
+      position="top-right"
+      theme="dark"
+      toastOptions={{
+        style: {
+          background: 'rgba(15, 23, 42, 0.95)',
+          border: '1px solid rgba(51, 65, 85, 0.6)',
+          backdropFilter: 'blur(12px)',
+          fontSize: '13px'
+        }
+      }}
+    />
+    <App />
+  </>
+);
+
+export default AppWithToaster;

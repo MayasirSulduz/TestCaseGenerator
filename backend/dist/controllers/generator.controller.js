@@ -67,14 +67,17 @@ Error Message:
 ${errorMessage || ''}
 
 Return ONLY the corrected test code with no markdown formatting or commentary.`;
-        const fixedRaw = await (0, llm_service_1.callGroqApi)(prompt);
-        if (!fixedRaw) {
-            res.status(500).json({ status: 'error', message: 'Failed to fix test code' });
+        const llmResult = await (0, llm_service_1.callLLMWithFallback)(prompt, 3000);
+        if (!llmResult) {
+            res.status(500).json({ status: 'error', message: 'All AI models failed to fix test code. Please check your API keys.' });
             return;
         }
         res.json({
             status: 'success',
-            tests: (0, codeParser_1.extractCodeFromMarkdown)(fixedRaw)
+            tests: (0, codeParser_1.extractCodeFromMarkdown)(llmResult.content),
+            modelUsed: llmResult.modelUsed,
+            fallbackUsed: llmResult.fallbackUsed,
+            fallbackReason: llmResult.fallbackReason
         });
     }
     catch (error) {

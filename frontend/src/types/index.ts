@@ -21,6 +21,9 @@ export interface GenerateTestsResult {
   tests?: string;
   coverageReport?: CoverageReport;
   message?: string;
+  modelUsed?: string;
+  fallbackUsed?: boolean;
+  fallbackReason?: string;
 }
 
 export interface HealthCheckResult {

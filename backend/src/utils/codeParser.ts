@@ -11,6 +11,13 @@ export function extractCodeFromMarkdown(text: string): string {
   return cleaned;
 }
 
+export function sanitizeTestImports(testCode: string): string {
+  let cleaned = testCode;
+  // Replace deprecated @testing-library/jest-dom/extend-expect sub-path with modern @testing-library/jest-dom
+  cleaned = cleaned.replace(/@testing-library\/jest-dom\/extend-expect/g, '@testing-library/jest-dom');
+  return cleaned;
+}
+
 export function fixPythonImports(testCode: string, correctModuleName: string): string {
   const wrongPatterns = [
     /from your_module import/gi,

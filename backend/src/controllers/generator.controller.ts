@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { detectFramework } from '../services/detector.service';
 import { generateTestsWithCoverage } from '../services/generator.service';
-import { callGroqApi } from '../services/llm.service';
+import { callLLMWithFallback } from '../services/llm.service';
 import { DetectFrameworkRequestDTO, GenerateTestsRequestDTO } from '../types';
 import { extractCodeFromMarkdown } from '../utils/codeParser';
 
@@ -71,15 +71,18 @@ ${errorMessage || ''}
 
 Return ONLY the corrected test code with no markdown formatting or commentary.`;
 
-    const fixedRaw = await callGroqApi(prompt);
-    if (!fixedRaw) {
-      res.status(500).json({ status: 'error', message: 'Failed to fix test code' });
+    const llmResult = await callLLMWithFallback(prompt, 3000);
+    if (!llmResult) {
+      res.status(500).json({ status: 'error', message: 'All AI models failed to fix test code. Please check your API keys.' });
       return;
     }
 
     res.json({
       status: 'success',
-      tests: extractCodeFromMarkdown(fixedRaw)
+      tests: extractCodeFromMarkdown(llmResult.content),
+      modelUsed: llmResult.modelUsed,
+      fallbackUsed: llmResult.fallbackUsed,
+      fallbackReason: llmResult.fallbackReason
     });
   } catch (error: any) {
     res.status(500).json({ status: 'error', message: error?.message || 'Failed to fix test code' });

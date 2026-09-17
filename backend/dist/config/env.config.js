@@ -11,7 +11,7 @@ exports.envConfig = {
     port: parseInt(process.env.PORT || process.env.FLASK_PORT || '5000', 10),
     groqApiKey: process.env.GROQ_API_KEY || '',
     groqApiUrl: process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1/chat/completions',
-    defaultModel: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+    geminiApiKey: process.env.GEMINI_API_KEY || '',
     maxIterations: 3,
     corsOrigins: ['http://localhost:5173', 'http://127.0.0.1:5173']
 };

@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractCodeFromMarkdown = extractCodeFromMarkdown;
+exports.sanitizeTestImports = sanitizeTestImports;
 exports.fixPythonImports = fixPythonImports;
 function extractCodeFromMarkdown(text) {
     let cleaned = text.replace(/^```[\w]*\n/gm, '');
@@ -10,6 +11,12 @@ function extractCodeFromMarkdown(text) {
         const lines = cleaned.split('\n');
         cleaned = lines.slice(1, -1).join('\n');
     }
+    return cleaned;
+}
+function sanitizeTestImports(testCode) {
+    let cleaned = testCode;
+    // Replace deprecated @testing-library/jest-dom/extend-expect sub-path with modern @testing-library/jest-dom
+    cleaned = cleaned.replace(/@testing-library\/jest-dom\/extend-expect/g, '@testing-library/jest-dom');
     return cleaned;
 }
 function fixPythonImports(testCode, correctModuleName) {

@@ -31,6 +31,9 @@ export interface GenerateTestsResponseDTO {
   tests?: string;
   coverageReport?: CoverageReportDTO;
   message?: string;
+  modelUsed?: string;
+  fallbackUsed?: boolean;
+  fallbackReason?: string;
 }
 
 export interface DetectFrameworkRequestDTO {

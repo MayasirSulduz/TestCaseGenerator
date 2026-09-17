@@ -11,6 +11,7 @@ import {
   Terminal,
   Zap
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { detectFramework, generateTests } from '../services/api';
 import { CoverageReport } from '../types';
 import CodeViewer from './CodeViewer';
@@ -30,6 +31,7 @@ const TestGenerator: React.FC = () => {
   const [error, setError] = useState<string>('');
   const [success, setSuccess] = useState<string>('');
   const [coverageReport, setCoverageReport] = useState<CoverageReport | null>(null);
+  const [modelUsed, setModelUsed] = useState<string>('');
 
   const handleFileSelect = async (file: File | null) => {
     if (!file) {
@@ -73,6 +75,7 @@ const TestGenerator: React.FC = () => {
       setLoading(true);
       setGeneratedTests('');
       setCoverageReport(null);
+      setModelUsed('');
 
       const filename = selectedFile ? selectedFile.name : 'module';
 
@@ -81,12 +84,35 @@ const TestGenerator: React.FC = () => {
       if (result.status === 'success' && result.tests) {
         setGeneratedTests(result.tests);
         setCoverageReport(result.coverageReport || null);
+        setModelUsed(result.modelUsed || '');
+
+        // Toast notifications for model fallback
+        if (result.fallbackUsed) {
+          toast.warning(`Switched to backup model: ${result.modelUsed}`, {
+            description: result.fallbackReason || 'Primary model was unavailable',
+            duration: 6000
+          });
+        } else {
+          toast.success(`Tests generated using ${result.modelUsed || 'AI'}`, {
+            duration: 3000
+          });
+        }
+
         setSuccess('Test suite generated successfully with local coverage analysis!');
       } else {
         setError(result.message || 'Failed to generate tests');
+        toast.error('Test generation failed', {
+          description: result.message || 'Check your API keys and try again',
+          duration: 8000
+        });
       }
     } catch (err: any) {
-      setError('Error: ' + (err?.message || err));
+      const errMsg = err?.response?.data?.message || err?.message || String(err);
+      setError('Error: ' + errMsg);
+      toast.error('Test generation error', {
+        description: errMsg,
+        duration: 8000
+      });
     } finally {
       setLoading(false);
     }
@@ -114,7 +140,7 @@ const TestGenerator: React.FC = () => {
         </div>
       )}
 
-      {/* Main Full-Width Grid (3 Cols Sidebar, 9 Cols Workspace) */}
+      {/* Main Full-Width Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start w-full">
         {/* Left Sidebar Config Panel */}
         <div className="lg:col-span-4 xl:col-span-3 bg-slate-900/60 border border-slate-800/80 rounded-3xl p-6 flex flex-col gap-6 shadow-2xl backdrop-blur-xl">
@@ -129,7 +155,7 @@ const TestGenerator: React.FC = () => {
             onFrameworkChange={setFramework}
           />
 
-          <hr className="border-slate-800/80 my-0.5" />
+          <hr className="border-slate-850 my-0.5" />
 
           <CoverageSlider value={coverageTarget} onChange={setCoverageTarget} />
 
@@ -156,7 +182,7 @@ const TestGenerator: React.FC = () => {
           </button>
         </div>
 
-        {/* Right Main Editor Workspace (Full Screen Width Expansion) */}
+        {/* Right Main Editor Workspace */}
         <div className="lg:col-span-8 xl:col-span-9 flex flex-col gap-6 w-full">
           {generatedTests ? (
             <>
@@ -178,15 +204,24 @@ const TestGenerator: React.FC = () => {
                         Real Coverage Execution Metrics
                       </h4>
                     </div>
-                    <span
-                      className={`text-sm font-black font-mono px-3 py-1 rounded-xl border ${
-                        coverageReport.totalCoverage >= coverageTarget
-                          ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
-                          : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
-                      }`}
-                    >
-                      {coverageReport.totalCoverage}% / {coverageTarget}% Target
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {/* Model Used Badge */}
+                      {modelUsed && (
+                        <span className="text-[10px] font-bold font-mono px-2.5 py-1 rounded-xl border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 flex items-center gap-1.5">
+                          <Cpu className="h-3 w-3" />
+                          {modelUsed}
+                        </span>
+                      )}
+                      <span
+                        className={`text-sm font-black font-mono px-3 py-1 rounded-xl border ${
+                          coverageReport.totalCoverage >= coverageTarget
+                            ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+                            : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
+                        }`}
+                      >
+                        {coverageReport.totalCoverage}% / {coverageTarget}% Target
+                      </span>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
@@ -209,6 +244,18 @@ const TestGenerator: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* Coverage Table Execution Output */}
+                  {coverageReport.summaryTable && coverageReport.summaryTable !== 'N/A' && (
+                    <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl flex flex-col gap-2 text-xs font-mono overflow-hidden">
+                      <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5 font-sans">
+                        <Terminal className="h-3.5 w-3.5 text-emerald-400" /> Execution Report Table:
+                      </span>
+                      <pre className="text-slate-300 bg-slate-900 p-3 rounded-xl border border-slate-850 overflow-x-auto text-[11px] leading-relaxed">
+                        {coverageReport.summaryTable}
+                      </pre>
+                    </div>
+                  )}
+
                   {coverageReport.suggestions && coverageReport.suggestions.length > 0 && (
                     <div className="p-4 bg-indigo-500/5 border border-indigo-500/20 rounded-2xl text-xs flex flex-col gap-2">
                       <span className="font-bold text-slate-200 flex items-center gap-1.5">
@@ -228,7 +275,6 @@ const TestGenerator: React.FC = () => {
               )}
             </>
           ) : (
-            /* Studio Hero Empty State */
             <div className="w-full bg-slate-900/40 border border-slate-800/80 rounded-3xl p-10 sm:p-14 flex flex-col items-center justify-center text-center gap-6 min-h-[520px] backdrop-blur-xl">
               <div className="relative flex items-center justify-center">
                 <div className="h-20 w-20 rounded-3xl bg-gradient-to-tr from-indigo-600/20 to-cyan-400/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shadow-2xl">
@@ -242,11 +288,10 @@ const TestGenerator: React.FC = () => {
                   Automated Unit Testing & Real Coverage Studio
                 </h3>
                 <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                  Upload your code on the left sidebar to automatically run local test sandbox runners (`pytest`, `jest`, `nyc`, `jacoco`), measure coverage line gaps, and iteratively refine tests using Llama 3.3.
+                  Upload your code on the left sidebar to automatically run local test sandbox runners (`pytest`, `jest`, `nyc`, `jacoco`), measure coverage line gaps, and iteratively refine tests.
                 </p>
               </div>
 
-              {/* Feature Badge Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-xl mt-4">
                 <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-2xl flex items-center gap-2.5 text-left">
                   <Terminal className="h-4 w-4 text-indigo-400 shrink-0" />
@@ -267,8 +312,8 @@ const TestGenerator: React.FC = () => {
                 <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-2xl flex items-center gap-2.5 text-left">
                   <Cpu className="h-4 w-4 text-cyan-400 shrink-0" />
                   <div>
-                    <p className="text-[11px] font-bold text-slate-200">Multi-Language</p>
-                    <p className="text-[10px] text-slate-500">Python, JS, TS, Java</p>
+                    <p className="text-[11px] font-bold text-slate-200">Multi-Model AI</p>
+                    <p className="text-[10px] text-slate-500">Auto-fallback chain</p>
                   </div>
                 </div>
               </div>
