@@ -9,13 +9,70 @@ exports.buildAllModelsFailedMessage = buildAllModelsFailedMessage;
 const axios_1 = __importDefault(require("axios"));
 const env_config_1 = require("../config/env.config");
 const model_config_1 = require("../config/model.config");
+// ── Helper Utilities ──────────────────────────────────────────────────────────
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+function parseWaitTimeMs(errorMsg) {
+    const match = errorMsg.match(/try again in ([0-9.]+)\s*(s|ms)/i);
+    if (match) {
+        const val = parseFloat(match[1]);
+        const unit = match[2].toLowerCase();
+        return unit === 's' ? Math.ceil(val * 1000) : Math.ceil(val);
+    }
+    return null;
+}
+/**
+ * Returns true for errors that are transient and worth retrying.
+ */
+function isRetryableError(error) {
+    const errData = error?.response?.data;
+    const errMsg = typeof errData === 'string'
+        ? errData
+        : JSON.stringify(errData || '');
+    // "high demand" / "overloaded" / "temporarily unavailable"
+    if (/high.?demand|overloaded|temporarily|unavailable|503|server.?error/i.test(errMsg)) {
+        return true;
+    }
+    // Network timeouts
+    if (/ETIMEDOUT|ECONNRESET|ENOTFOUND|ENETUNREACH|socket.?hang/i.test(error?.message || '')) {
+        return true;
+    }
+    return false;
+}
 // ── Token Estimation ──────────────────────────────────────────────────────────
 /**
  * Rough token estimate: ~4 characters per token (industry heuristic).
- * This is intentionally conservative to avoid over-sending.
  */
 function estimateTokenCount(text) {
-    return Math.ceil(text.length / 4);
+    return Math.ceil((text || '').length / 4);
+}
+// ── Truncation Detection ──────────────────────────────────────────────────────
+/**
+ * Detects if the LLM output appears to be truncated mid-code.
+ * Common signs: ends mid-function, unmatched braces, ends with keywords.
+ */
+function isOutputTruncated(content) {
+    const trimmed = content.trimEnd();
+    if (!trimmed || trimmed.length < 50)
+        return false;
+    // Get the last meaningful line
+    const lines = trimmed.split('\n');
+    const lastLine = lines[lines.length - 1].trim();
+    // Check if it ends with a keyword that expects more code
+    const truncatedEndings = /^(def|class|if|elif|else|for|while|try|except|with|return|import|from|async|await|function|const|let|var|export)\s*$/;
+    if (truncatedEndings.test(lastLine))
+        return true;
+    // Check if it ends with an incomplete function signature
+    if (/def\s+\w+\s*\(.*$/.test(lastLine) && !lastLine.includes(':'))
+        return true;
+    // Check if last line ends mid-expression (e.g. "assert find_max" or "self.")
+    if (/\.\s*$/.test(lastLine) || /=\s*$/.test(lastLine))
+        return true;
+    // Check for unmatched braces/brackets (JS/TS/Java)
+    const opens = (trimmed.match(/[{(]/g) || []).length;
+    const closes = (trimmed.match(/[})]/g) || []).length;
+    if (opens > closes + 3)
+        return true; // allow small mismatch for string content
+    return false;
 }
 // ── Provider-Specific API Callers ─────────────────────────────────────────────
 async function callGroqApi(prompt, model, maxTokens) {
@@ -82,10 +139,7 @@ async function callGeminiApi(prompt, model, maxTokens) {
     const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
     return text || null;
 }
-// ── Fallback Engine ───────────────────────────────────────────────────────────
-/**
- * Detect whether an Axios error is a rate-limit / token-limit error.
- */
+// ── Rate Limit Checker ────────────────────────────────────────────────────────
 function isRateLimitError(error) {
     const status = error?.response?.status;
     if (status === 429)
@@ -94,7 +148,7 @@ function isRateLimitError(error) {
     const errMsg = typeof errData === 'string'
         ? errData
         : JSON.stringify(errData || '');
-    return /rate.?limit|tokens?.per.?minute|tpm|too.?large|quota/i.test(errMsg);
+    return /rate.?limit|tokens?.per.?minute|tpm|otpm|too.?large|quota|exceeded/i.test(errMsg);
 }
 function isApiKeyMissing(model) {
     if (model.provider === 'groq')
@@ -103,98 +157,125 @@ function isApiKeyMissing(model) {
         return !env_config_1.envConfig.geminiApiKey;
     return true;
 }
+// ── Fallback Engine ───────────────────────────────────────────────────────────
 /**
- * Core fallback engine.
+ * Core fallback engine trying each model in MODEL_CHAIN order:
+ * 1. Qwen 3.8 27B (Groq)    — max_tokens capped to 900 (OTPM=1000)
+ * 2. GPT-OSS 120B (Groq)    — max_tokens capped to 3000 (TPM=8000)
+ * 3. Gemini 3.6 Flash        — max_tokens up to 8000 (TPM=1M)
  *
- * Iterates through MODEL_CHAIN in order. For each model:
- *  1. Skip if the provider's API key is not configured.
- *  2. Skip if the estimated prompt tokens + maxTokens exceeds the model's context window.
- *  3. Call the provider-specific API.
- *  4. On success → return immediately.
- *  5. On rate-limit / size error → log and try next model.
- *  6. On other error → log and try next model.
- *
- * Returns null only if ALL models fail.
+ * Each model gets up to 2 attempts (retry on rate-limit with short wait,
+ * or retry on "high demand" / network timeout after 5s).
  */
 async function callLLMWithFallback(prompt, maxTokens = 3000) {
     const promptTokens = estimateTokenCount(prompt);
     const failureReasons = [];
-    let firstModelIndex = 0;
     for (let i = 0; i < model_config_1.MODEL_CHAIN.length; i++) {
         const model = model_config_1.MODEL_CHAIN[i];
-        // 1. API key check
+        // 1. API Key check
         if (isApiKeyMissing(model)) {
-            const reason = `${model.displayName}: API key not configured`;
+            const reason = `${model.displayName}: API key not configured in backend .env`;
             console.log(`  ⏭ Skipping ${model.displayName} — API key not configured`);
             failureReasons.push(reason);
             continue;
         }
-        // 2. Context window check
+        // 2. Context Window check
         const totalTokens = promptTokens + maxTokens;
         if (totalTokens > model.contextWindow) {
-            const reason = `${model.displayName}: Code too large (${totalTokens} tokens > ${model.contextWindow} context)`;
+            const reason = `${model.displayName}: Prompt too large (${totalTokens} tokens > ${model.contextWindow} limit)`;
             console.log(`  ⏭ Skipping ${model.displayName} — ${reason}`);
             failureReasons.push(reason);
             continue;
         }
-        // 3. Clamp maxTokens to model's max output
-        const clampedMaxTokens = Math.min(maxTokens, model.maxOutputTokens);
-        // 4. Call the appropriate provider
-        console.log(`  🤖 Trying ${model.displayName} (${model.id})...`);
-        try {
-            let content = null;
-            if (model.provider === 'groq') {
-                content = await callGroqApi(prompt, model.id, clampedMaxTokens);
-            }
-            else if (model.provider === 'gemini') {
-                content = await callGeminiApi(prompt, model.id, clampedMaxTokens);
-            }
-            if (content) {
-                const fallbackUsed = i > firstModelIndex || failureReasons.length > 0;
-                console.log(`  ✓ ${model.displayName} responded successfully${fallbackUsed ? ' (fallback)' : ''}`);
-                return {
-                    content,
-                    modelUsed: model.displayName,
-                    fallbackUsed,
-                    fallbackReason: fallbackUsed ? failureReasons.join('; ') : undefined
-                };
-            }
-            // Content was null but no exception
-            const reason = `${model.displayName}: Empty response`;
-            console.log(`  ⚠ ${model.displayName} — empty response, trying next...`);
-            failureReasons.push(reason);
-        }
-        catch (error) {
-            const isRateLimit = isRateLimitError(error);
-            const errDetail = error?.response?.data?.error?.message
-                || error?.response?.data?.error?.status
-                || error?.message
-                || 'Unknown error';
-            if (isRateLimit) {
-                const reason = `${model.displayName}: Rate/token limit exceeded`;
-                console.log(`  ⚠ ${model.displayName} — rate limit hit, trying next...`);
-                console.log(`    Detail: ${errDetail}`);
+        // 3. Clamp max output tokens to BOTH model.maxOutputTokens AND model.maxRequestTokens
+        //    maxRequestTokens is the OTPM-safe cap so the request never exceeds the per-minute hard limit
+        const clampedMaxTokens = Math.min(maxTokens, model.maxOutputTokens, model.maxRequestTokens);
+        // 4. Try API Call (up to 2 attempts with retry on rate-limit or transient errors)
+        console.log(`  🤖 Trying ${model.displayName} (${model.id}) [max_tokens=${clampedMaxTokens}]...`);
+        let attempt = 0;
+        const maxAttempts = 2;
+        while (attempt < maxAttempts) {
+            attempt++;
+            try {
+                let content = null;
+                if (model.provider === 'groq') {
+                    content = await callGroqApi(prompt, model.id, clampedMaxTokens);
+                }
+                else if (model.provider === 'gemini') {
+                    content = await callGeminiApi(prompt, model.id, clampedMaxTokens);
+                }
+                if (content) {
+                    // Check if the output appears truncated mid-statement
+                    if (isOutputTruncated(content)) {
+                        const reason = `${model.displayName}: Output truncated (max_tokens=${clampedMaxTokens} too low)`;
+                        console.log(`  ⚠ ${model.displayName} — output truncated mid-code, trying next model...`);
+                        failureReasons.push(reason);
+                        break; // try next model
+                    }
+                    const fallbackUsed = i > 0 || failureReasons.length > 0;
+                    console.log(`  ✓ ${model.displayName} responded successfully${fallbackUsed ? ' (fallback)' : ''}`);
+                    return {
+                        content,
+                        modelUsed: model.displayName,
+                        fallbackUsed,
+                        fallbackReason: fallbackUsed ? failureReasons.join('; ') : undefined,
+                        failureReasons
+                    };
+                }
+                const reason = `${model.displayName}: Empty response received`;
+                console.log(`  ⚠ ${model.displayName} — empty response`);
                 failureReasons.push(reason);
+                break;
             }
-            else {
-                const reason = `${model.displayName}: ${errDetail}`;
-                console.log(`  ✗ ${model.displayName} — error: ${errDetail}`);
+            catch (error) {
+                const errDetail = error?.response?.data?.error?.message
+                    || error?.response?.data?.error?.status
+                    || error?.message
+                    || 'Unknown error';
+                // Check if it's a rate-limit error
+                if (isRateLimitError(error)) {
+                    if (attempt < maxAttempts) {
+                        const waitMs = parseWaitTimeMs(errDetail);
+                        if (waitMs && waitMs <= 20000) {
+                            console.log(`  ⏳ ${model.displayName} rate limited. Waiting ${(waitMs / 1000).toFixed(1)}s before retry...`);
+                            await delay(waitMs + 1000);
+                            continue;
+                        }
+                    }
+                    const reason = `${model.displayName}: Rate limit exceeded`;
+                    console.log(`  ⚠ ${model.displayName} — rate limit hit`);
+                    failureReasons.push(reason);
+                    break;
+                }
+                // Check if it's a retryable transient error (high demand, network timeout)
+                if (isRetryableError(error) && attempt < maxAttempts) {
+                    console.log(`  ⏳ ${model.displayName} transient error. Retrying in 5s... (${errDetail.slice(0, 80)})`);
+                    await delay(5000);
+                    continue;
+                }
+                // Non-retryable or final attempt
+                const reason = `${model.displayName}: ${errDetail.slice(0, 120)}`;
+                console.log(`  ✗ ${model.displayName} — error: ${errDetail.slice(0, 120)}`);
                 failureReasons.push(reason);
+                break;
             }
         }
     }
     // All models failed
-    console.error(`  ✗ All ${model_config_1.MODEL_CHAIN.length} models failed: ${failureReasons.join(' | ')}`);
+    console.error(`  ✗ All ${model_config_1.MODEL_CHAIN.length} models failed:`);
+    failureReasons.forEach(r => console.error(`    • ${r}`));
     return null;
 }
 /**
- * Collects the specific failure reasons into a human-readable message
- * for the frontend error display.
+ * Builds clear, formatted breakdown of why each model failed.
  */
 function buildAllModelsFailedMessage(failureReasons) {
-    const base = 'All AI models failed to generate tests.';
-    if (failureReasons) {
-        return `${base} Details: ${failureReasons}`;
+    if (Array.isArray(failureReasons) && failureReasons.length > 0) {
+        const list = failureReasons.map(r => `• ${r}`).join('\n');
+        return `All AI models failed to generate tests:\n${list}\n\nTroubleshooting:\n- Check your internet connection.\n- Wait ~1 minute for Groq token limits to reset.\n- Ensure GEMINI_API_KEY is set in backend/.env.`;
     }
-    return `${base} Please check your API keys and try again.`;
+    if (typeof failureReasons === 'string') {
+        return `All AI models failed: ${failureReasons}`;
+    }
+    return 'All AI models failed to generate tests. Please check your API keys and rate limits.';
 }

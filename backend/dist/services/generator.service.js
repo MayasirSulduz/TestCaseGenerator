@@ -9,6 +9,7 @@ const javascript_runner_1 = require("./runners/javascript.runner");
 const java_runner_1 = require("./runners/java.runner");
 const python_runner_1 = require("./runners/python.runner");
 const typescript_runner_1 = require("./runners/typescript.runner");
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 function getRunnerForLanguage(language) {
     switch (language) {
         case 'Python':
@@ -22,6 +23,14 @@ function getRunnerForLanguage(language) {
         default:
             return null;
     }
+}
+function truncateCodeForPrompt(code, maxLines = 250) {
+    if (!code)
+        return '';
+    const lines = code.split('\n');
+    if (lines.length <= maxLines)
+        return code;
+    return lines.slice(0, maxLines).join('\n') + `\n\n... [truncated ${lines.length - maxLines} lines for model context safety]`;
 }
 function generateSuggestions(currentCoverage, targetCoverage, testPassed) {
     const suggestions = [];
@@ -69,21 +78,24 @@ Generate the complete test file:
 `;
 }
 function buildRepairPrompt(sourceCode, testCode, errOutput, language, framework, filename) {
+    const safeSource = truncateCodeForPrompt(sourceCode, 200);
+    const safeTests = truncateCodeForPrompt(testCode, 250);
+    const safeErr = (errOutput || '').slice(0, 1200);
     return `The generated ${framework} test suite failed during local execution.
 
 Test Execution Error Output:
 \`\`\`
-${errOutput.slice(0, 2000)}
+${safeErr}
 \`\`\`
 
-Source Code (filename: ${filename}):
+Source Code Excerpt (filename: ${filename}):
 \`\`\`${language.toLowerCase()}
-${sourceCode}
+${safeSource}
 \`\`\`
 
-Current Failing Tests:
+Current Failing Tests Excerpt:
 \`\`\`${language.toLowerCase()}
-${testCode}
+${safeTests}
 \`\`\`
 
 CRITICAL: FIX the test code so that ALL tests pass cleanly with ZERO errors!
@@ -93,18 +105,20 @@ CRITICAL: FIX the test code so that ALL tests pass cleanly with ZERO errors!
 `;
 }
 function buildEnhancementPrompt(sourceCode, testCode, currentCoverage, targetCoverage, missingLines, language, moduleName) {
+    const safeSource = truncateCodeForPrompt(sourceCode, 200);
+    const safeTests = truncateCodeForPrompt(testCode, 250);
     return `The current test coverage is ${currentCoverage}%, but we need ${targetCoverage}%.
 
 Missing/Uncovered Lines: ${missingLines}
 
-Source Code:
+Source Code Excerpt:
 \`\`\`${language.toLowerCase()}
-${sourceCode}
+${safeSource}
 \`\`\`
 
-Current Tests:
+Current Tests Excerpt:
 \`\`\`${language.toLowerCase()}
-${testCode}
+${safeTests}
 \`\`\`
 
 CRITICAL: For Python - Your imports MUST use: from ${moduleName} import *
@@ -126,13 +140,15 @@ async function generateTestsForChunks(sourceCode, language, framework, coverageT
     console.log(`📦 Large file detected — splitting into ${chunks.length} chunks`);
     const chunkResults = [];
     let lastLLMResult = null;
+    const allFailures = [];
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         console.log(`  📝 Chunk ${i + 1}/${chunks.length}: ${chunk.name} (lines ${chunk.startLine}-${chunk.endLine})`);
         const chunkPrompt = buildInitialPrompt(chunk.code, language, framework, coverageTarget, filename, moduleName);
-        const result = await (0, llm_service_1.callLLMWithFallback)(chunkPrompt, 3000);
+        const result = await (0, llm_service_1.callLLMWithFallback)(chunkPrompt, 2000);
         if (!result) {
             console.warn(`  ⚠ Chunk ${i + 1} failed — skipping`);
+            allFailures.push(`Chunk ${i + 1} (${chunk.name}): all fallback models failed`);
             continue;
         }
         lastLLMResult = result;
@@ -141,12 +157,19 @@ async function generateTestsForChunks(sourceCode, language, framework, coverageT
             code = (0, codeParser_1.fixPythonImports)(code, moduleName);
         }
         chunkResults.push(code);
+        // Pause between chunks — Qwen OTPM resets per minute, so we wait
+        // long enough for the output-token bucket to partially refill
+        if (i < chunks.length - 1) {
+            const waitSec = 8;
+            console.log(`  ⏳ Waiting ${waitSec}s before next chunk (rate limit cooldown)...`);
+            await delay(waitSec * 1000);
+        }
     }
     if (chunkResults.length === 0 || !lastLLMResult) {
         return null;
     }
     const mergedCode = (0, chunker_service_1.mergeTestChunks)(chunkResults, language);
-    return { testCode: mergedCode, llmResult: lastLLMResult };
+    return { testCode: mergedCode, llmResult: lastLLMResult, allFailures };
 }
 // ── Main Entry Point ──────────────────────────────────────────────────────────
 async function generateTestsWithCoverage(request) {
@@ -180,7 +203,7 @@ async function generateTestsWithCoverage(request) {
         if (!chunkedResult) {
             return {
                 status: 'error',
-                message: (0, llm_service_1.buildAllModelsFailedMessage)('All models failed during chunked generation')
+                message: (0, llm_service_1.buildAllModelsFailedMessage)('All models exhausted during chunked generation. Check backend logs for per-model details.')
             };
         }
         testCode = chunkedResult.testCode;
@@ -195,7 +218,7 @@ async function generateTestsWithCoverage(request) {
         if (!llmResult) {
             return {
                 status: 'error',
-                message: (0, llm_service_1.buildAllModelsFailedMessage)('Please check your GROQ_API_KEY / GEMINI_API_KEY and backend logs.')
+                message: (0, llm_service_1.buildAllModelsFailedMessage)('All models failed for single-shot generation. Check backend logs for per-model details.')
             };
         }
         modelUsed = llmResult.modelUsed;
@@ -237,9 +260,10 @@ async function generateTestsWithCoverage(request) {
                     const missingLines = coverageResult.missing_lines || 'All lines';
                     nextPrompt = buildEnhancementPrompt(sourceCode, testCode, currentCoverage, coverageTarget, missingLines, language, moduleName);
                 }
+                // Brief cooldown before hitting the LLM again for refinement
+                await delay(5000);
                 const improvedResult = await (0, llm_service_1.callLLMWithFallback)(nextPrompt, 3000);
                 if (improvedResult) {
-                    // Update model tracking if refinement used a different model
                     if (improvedResult.fallbackUsed && !fallbackUsed) {
                         fallbackUsed = true;
                         fallbackReason = improvedResult.fallbackReason;

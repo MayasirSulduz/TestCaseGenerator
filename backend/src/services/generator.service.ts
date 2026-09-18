@@ -14,6 +14,8 @@ import { JavaRunner } from './runners/java.runner';
 import { PythonRunner } from './runners/python.runner';
 import { TypeScriptRunner } from './runners/typescript.runner';
 
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 function getRunnerForLanguage(language: string): ITestRunner | null {
   switch (language) {
     case 'Python':
@@ -27,6 +29,13 @@ function getRunnerForLanguage(language: string): ITestRunner | null {
     default:
       return null;
   }
+}
+
+function truncateCodeForPrompt(code: string, maxLines: number = 250): string {
+  if (!code) return '';
+  const lines = code.split('\n');
+  if (lines.length <= maxLines) return code;
+  return lines.slice(0, maxLines).join('\n') + `\n\n... [truncated ${lines.length - maxLines} lines for model context safety]`;
 }
 
 function generateSuggestions(currentCoverage: number, targetCoverage: number, testPassed: boolean): string[] {
@@ -92,21 +101,25 @@ function buildRepairPrompt(
   framework: string,
   filename: string
 ): string {
+  const safeSource = truncateCodeForPrompt(sourceCode, 200);
+  const safeTests = truncateCodeForPrompt(testCode, 250);
+  const safeErr = (errOutput || '').slice(0, 1200);
+
   return `The generated ${framework} test suite failed during local execution.
 
 Test Execution Error Output:
 \`\`\`
-${errOutput.slice(0, 2000)}
+${safeErr}
 \`\`\`
 
-Source Code (filename: ${filename}):
+Source Code Excerpt (filename: ${filename}):
 \`\`\`${language.toLowerCase()}
-${sourceCode}
+${safeSource}
 \`\`\`
 
-Current Failing Tests:
+Current Failing Tests Excerpt:
 \`\`\`${language.toLowerCase()}
-${testCode}
+${safeTests}
 \`\`\`
 
 CRITICAL: FIX the test code so that ALL tests pass cleanly with ZERO errors!
@@ -125,18 +138,21 @@ function buildEnhancementPrompt(
   language: string,
   moduleName: string
 ): string {
+  const safeSource = truncateCodeForPrompt(sourceCode, 200);
+  const safeTests = truncateCodeForPrompt(testCode, 250);
+
   return `The current test coverage is ${currentCoverage}%, but we need ${targetCoverage}%.
 
 Missing/Uncovered Lines: ${missingLines}
 
-Source Code:
+Source Code Excerpt:
 \`\`\`${language.toLowerCase()}
-${sourceCode}
+${safeSource}
 \`\`\`
 
-Current Tests:
+Current Tests Excerpt:
 \`\`\`${language.toLowerCase()}
-${testCode}
+${safeTests}
 \`\`\`
 
 CRITICAL: For Python - Your imports MUST use: from ${moduleName} import *
@@ -162,12 +178,13 @@ async function generateTestsForChunks(
   coverageTarget: number,
   filename: string,
   moduleName: string
-): Promise<{ testCode: string; llmResult: LLMCallResult } | null> {
+): Promise<{ testCode: string; llmResult: LLMCallResult; allFailures: string[] } | null> {
   const chunks = chunkCode(sourceCode, language);
   console.log(`📦 Large file detected — splitting into ${chunks.length} chunks`);
 
   const chunkResults: string[] = [];
   let lastLLMResult: LLMCallResult | null = null;
+  const allFailures: string[] = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
@@ -182,9 +199,10 @@ async function generateTestsForChunks(
       moduleName
     );
 
-    const result = await callLLMWithFallback(chunkPrompt, 3000);
+    const result = await callLLMWithFallback(chunkPrompt, 2000);
     if (!result) {
       console.warn(`  ⚠ Chunk ${i + 1} failed — skipping`);
+      allFailures.push(`Chunk ${i + 1} (${chunk.name}): all fallback models failed`);
       continue;
     }
 
@@ -194,6 +212,14 @@ async function generateTestsForChunks(
       code = fixPythonImports(code, moduleName);
     }
     chunkResults.push(code);
+
+    // Pause between chunks — Qwen OTPM resets per minute, so we wait
+    // long enough for the output-token bucket to partially refill
+    if (i < chunks.length - 1) {
+      const waitSec = 8;
+      console.log(`  ⏳ Waiting ${waitSec}s before next chunk (rate limit cooldown)...`);
+      await delay(waitSec * 1000);
+    }
   }
 
   if (chunkResults.length === 0 || !lastLLMResult) {
@@ -201,7 +227,7 @@ async function generateTestsForChunks(
   }
 
   const mergedCode = mergeTestChunks(chunkResults, language);
-  return { testCode: mergedCode, llmResult: lastLLMResult };
+  return { testCode: mergedCode, llmResult: lastLLMResult, allFailures };
 }
 
 // ── Main Entry Point ──────────────────────────────────────────────────────────
@@ -248,7 +274,9 @@ export async function generateTestsWithCoverage(
     if (!chunkedResult) {
       return {
         status: 'error',
-        message: buildAllModelsFailedMessage('All models failed during chunked generation')
+        message: buildAllModelsFailedMessage(
+          'All models exhausted during chunked generation. Check backend logs for per-model details.'
+        )
       };
     }
 
@@ -268,7 +296,7 @@ export async function generateTestsWithCoverage(
       return {
         status: 'error',
         message: buildAllModelsFailedMessage(
-          'Please check your GROQ_API_KEY / GEMINI_API_KEY and backend logs.'
+          'All models failed for single-shot generation. Check backend logs for per-model details.'
         )
       };
     }
@@ -323,9 +351,10 @@ export async function generateTestsWithCoverage(
           );
         }
 
+        // Brief cooldown before hitting the LLM again for refinement
+        await delay(5000);
         const improvedResult = await callLLMWithFallback(nextPrompt, 3000);
         if (improvedResult) {
-          // Update model tracking if refinement used a different model
           if (improvedResult.fallbackUsed && !fallbackUsed) {
             fallbackUsed = true;
             fallbackReason = improvedResult.fallbackReason;

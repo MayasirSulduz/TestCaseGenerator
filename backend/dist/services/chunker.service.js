@@ -5,10 +5,10 @@ exports.chunkCode = chunkCode;
 exports.mergeTestChunks = mergeTestChunks;
 const llm_service_1 = require("./llm.service");
 // ── Constants ─────────────────────────────────────────────────────────────────
-/** Token threshold above which we split the source code into chunks. */
-const CHUNK_TOKEN_THRESHOLD = 4000;
-/** Approximate max tokens per chunk (target, not hard limit). */
-const MAX_CHUNK_TOKENS = 3500;
+/** Token threshold above which source code is split into chunks (~750 lines). */
+const CHUNK_TOKEN_THRESHOLD = 3000;
+/** Target token count per chunk (~500 lines of code). */
+const TARGET_CHUNK_TOKENS = 2000;
 // ── Public API ────────────────────────────────────────────────────────────────
 /**
  * Returns true if the source code is large enough to benefit from chunking.
@@ -17,8 +17,8 @@ function shouldChunk(sourceCode) {
     return (0, llm_service_1.estimateTokenCount)(sourceCode) > CHUNK_TOKEN_THRESHOLD;
 }
 /**
- * Split source code into logical chunks by function/class boundaries.
- * Falls back to line-based splitting if no boundaries are detected.
+ * Split source code into logical chunks by grouping functions/classes.
+ * Target chunk size is ~2000 tokens (~500 lines).
  */
 function chunkCode(sourceCode, language) {
     const lines = sourceCode.split('\n');
@@ -87,55 +87,52 @@ function detectBoundaries(lines, language) {
                 || line.match(/^(export\s+)?const\s+(\w+)\s*=\s*(async\s+)?function/);
         }
         if (match) {
-            // Extract the function/class name from the last captured group
             const name = match[match.length - 1] || match[0];
             boundaries.push({ line: i, name: typeof name === 'string' ? name : `block_${i}` });
         }
     }
     return boundaries;
 }
+/**
+ * Group consecutive boundaries into optimal chunk sizes (~2000 tokens / 500 lines).
+ */
 function splitByBoundaries(lines, boundaries) {
     const chunks = [];
-    // Collect any file-level imports/header before the first boundary
+    // File-level imports/header before first boundary
     const headerEnd = boundaries[0].line;
     const header = headerEnd > 0 ? lines.slice(0, headerEnd).join('\n') : '';
+    let currentStartLine = boundaries[0].line;
+    let currentNames = [];
+    let currentLines = [];
     for (let i = 0; i < boundaries.length; i++) {
         const start = boundaries[i].line;
         const end = i + 1 < boundaries.length ? boundaries[i + 1].line : lines.length;
-        let chunkCode = lines.slice(start, end).join('\n');
-        // Prepend header (imports) to each chunk so the LLM has full context
-        if (header) {
-            chunkCode = header + '\n\n' + chunkCode;
+        const blockLines = lines.slice(start, end);
+        currentNames.push(boundaries[i].name);
+        currentLines.push(...blockLines);
+        const candidateCode = header ? header + '\n\n' + currentLines.join('\n') : currentLines.join('\n');
+        const tokenCount = (0, llm_service_1.estimateTokenCount)(candidateCode);
+        const isLast = i === boundaries.length - 1;
+        if (tokenCount >= TARGET_CHUNK_TOKENS || isLast) {
+            const firstName = currentNames[0];
+            const lastName = currentNames[currentNames.length - 1];
+            const chunkName = currentNames.length > 1 ? `${firstName} to ${lastName}` : firstName;
+            chunks.push({
+                code: candidateCode,
+                startLine: currentStartLine + 1,
+                endLine: end,
+                name: chunkName
+            });
+            // Reset for next chunk
+            currentStartLine = end;
+            currentNames = [];
+            currentLines = [];
         }
-        // Check if this chunk is too large; if so, merge with adjacent
-        const tokens = (0, llm_service_1.estimateTokenCount)(chunkCode);
-        if (tokens > MAX_CHUNK_TOKENS && chunks.length > 0) {
-            // Try to merge small chunks together
-            const prev = chunks[chunks.length - 1];
-            const mergedTokens = (0, llm_service_1.estimateTokenCount)(prev.code + '\n' + chunkCode);
-            if (mergedTokens <= MAX_CHUNK_TOKENS * 1.5) {
-                chunks[chunks.length - 1] = {
-                    code: prev.code + '\n' + lines.slice(start, end).join('\n'),
-                    startLine: prev.startLine,
-                    endLine: end,
-                    name: `${prev.name} + ${boundaries[i].name}`
-                };
-                continue;
-            }
-        }
-        chunks.push({
-            code: chunkCode,
-            startLine: start + 1,
-            endLine: end,
-            name: boundaries[i].name
-        });
     }
-    // If chunking produced only 1 chunk, it means the file is essentially one big block.
-    // Return as-is — the fallback engine will handle it.
-    return chunks;
+    return chunks.length > 0 ? chunks : splitByLines(lines);
 }
 function splitByLines(lines) {
-    const linesPerChunk = 250;
+    const linesPerChunk = 450; // ~1800 tokens per chunk
     const chunks = [];
     for (let i = 0; i < lines.length; i += linesPerChunk) {
         const end = Math.min(i + linesPerChunk, lines.length);
