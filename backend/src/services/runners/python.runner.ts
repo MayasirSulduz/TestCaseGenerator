@@ -16,12 +16,14 @@ const execAsync = promisify(exec);
 const CONFTEST_PY = `
 import sys
 import types
+import inspect
+import asyncio
+import pytest
 from unittest.mock import MagicMock
 
 class _AutoMockImporter:
     """Meta path finder that auto-mocks any missing module."""
 
-    # Standard library modules we should NEVER mock (they're always available)
     _STDLIB = {
         'abc', 'argparse', 'ast', 'asyncio', 'base64', 'builtins',
         'collections', 'contextlib', 'copy', 'csv', 'dataclasses',
@@ -33,19 +35,18 @@ class _AutoMockImporter:
         'struct', 'subprocess', 'sys', 'tempfile', 'textwrap', 'threading',
         'time', 'traceback', 'types', 'typing', 'unittest', 'urllib',
         'uuid', 'warnings', 'weakref', 'xml', 'zipfile',
-        # testing
         'pytest', '_pytest', 'coverage', 'pluggy',
     }
 
     def find_module(self, fullname, path=None):
         top = fullname.split('.')[0]
         if top in self._STDLIB:
-            return None          # let normal import handle it
+            return None
         try:
             __import__(fullname)
-            return None          # already importable
+            return None
         except ImportError:
-            return self          # we'll mock it
+            return self
 
     def load_module(self, fullname):
         if fullname in sys.modules:
@@ -53,14 +54,22 @@ class _AutoMockImporter:
         mod = types.ModuleType(fullname)
         mod.__path__ = []
         mod.__loader__ = self
-        # Make attribute access return MagicMocks so code like
-        # "from flask import Flask" works seamlessly
         mod.__getattr__ = lambda name: MagicMock()
         sys.modules[fullname] = mod
         return mod
 
-# Install the auto-mocker BEFORE anything else is imported
 sys.meta_path.insert(0, _AutoMockImporter())
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_pyfunc_call(pyfuncitem):
+    if inspect.iscoroutinefunction(pyfuncitem.obj):
+        sig = inspect.signature(pyfuncitem.obj)
+        kwargs = {}
+        for param in sig.parameters:
+            if param in pyfuncitem.funcargs:
+                kwargs[param] = pyfuncitem.funcargs[param]
+        asyncio.run(pyfuncitem.obj(**kwargs))
+        return True
 `;
 
 export class PythonRunner implements ITestRunner {
@@ -97,17 +106,42 @@ with open(file_path, 'r', encoding='utf-8') as f:
 lines = code.split('\\n')
 modified = False
 
-# Phase 1: AST syntax check (remove incomplete trailing lines or syntax errors)
+# Pass 0: Automatically convert 'def ' to 'async def ' for function blocks containing 'await'
+i = 0
+while i < len(lines):
+    line_str = lines[i]
+    stripped = line_str.strip()
+    if stripped.startswith('def ') and '(' in stripped:
+        indent = len(line_str) - len(line_str.lstrip())
+        has_await = False
+        j = i + 1
+        while j < len(lines):
+            lj = lines[j]
+            lj_strip = lj.strip()
+            if lj_strip and not lj_strip.startswith('#'):
+                j_indent = len(lj) - len(lj.lstrip())
+                if j_indent <= indent and lj_strip.startswith(('def ', 'async def ', 'class ')):
+                    break
+                if 'await ' in lj_strip:
+                    has_await = True
+                    break
+            j += 1
+        if has_await:
+            lines[i] = line_str.replace('def ', 'async def ', 1)
+            modified = True
+    i += 1
+
+# Phase 1: AST syntax check (replace syntax error lines with 'pass # [SyntaxError]' to preserve block structure)
 for attempt in range(50):
     try:
         ast.parse('\\n'.join(lines))
         break
     except SyntaxError as e:
         modified = True
-        if e.lineno and e.lineno <= len(lines):
-            lines.pop(e.lineno - 1)
-        else:
-            lines.pop()
+        err_idx = (e.lineno - 1) if (e.lineno and e.lineno <= len(lines)) else (len(lines) - 1)
+        orig_line = lines[err_idx]
+        indent_str = ' ' * (len(orig_line) - len(orig_line.lstrip()))
+        lines[err_idx] = f"{indent_str}pass  # [SyntaxError Fixed] {orig_line.strip()}"
 
 # Phase 2: Runtime module exec check (comment out top-level lines causing NameError/AttributeError)
 for attempt in range(20):

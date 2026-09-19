@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
+  Clock,
   Code2,
   Cpu,
   GitBranch,
@@ -204,7 +205,14 @@ const TestGenerator: React.FC = () => {
                         Real Coverage Execution Metrics
                       </h4>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {/* Execution Timing Badge */}
+                      {coverageReport.executionTimeSec && (
+                        <span className="text-[10px] font-bold font-mono px-2.5 py-1 rounded-xl border border-sky-500/30 bg-sky-500/10 text-sky-300 flex items-center gap-1.5" title="Total processing & execution time">
+                          <Clock className="h-3 w-3 text-sky-400" />
+                          ⏱️ {coverageReport.executionTimeSec}s
+                        </span>
+                      )}
                       {/* Model Used Badge */}
                       {modelUsed && (
                         <span className="text-[10px] font-bold font-mono px-2.5 py-1 rounded-xl border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 flex items-center gap-1.5">

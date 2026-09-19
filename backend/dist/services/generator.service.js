@@ -183,6 +183,7 @@ async function generateTestsForChunks(sourceCode, language, framework, coverageT
 }
 // ── Main Entry Point ──────────────────────────────────────────────────────────
 async function generateTestsWithCoverage(request) {
+    const startTime = Date.now();
     const sourceCode = (request.code || '').trim();
     const language = request.language || 'JavaScript';
     const framework = request.framework || 'Jest';
@@ -298,14 +299,8 @@ async function generateTestsWithCoverage(request) {
                     if (language === 'Python') {
                         newCode = (0, codeParser_1.fixPythonImports)(newCode, moduleName);
                     }
-                    if (testPassed) {
-                        // Enhancement pass: merge new tests into existing passing test suite to preserve coverage
-                        testCode = (0, chunker_service_1.mergeTestChunks)([testCode, newCode], language);
-                    }
-                    else {
-                        // Repair pass: replace with corrected test file
-                        testCode = newCode;
-                    }
+                    // Always merge new/repaired test blocks into testCode to PRESERVE all previously passing tests!
+                    testCode = (0, chunker_service_1.mergeTestChunks)([testCode, newCode], language);
                 }
                 else {
                     console.warn('Failed to receive response from LLM during refinement pass');
@@ -316,6 +311,9 @@ async function generateTestsWithCoverage(request) {
         }
     }
     // ── Step 3: Build response ──────────────────────────────────────────────
+    const executionTimeMs = Date.now() - startTime;
+    const executionTimeSec = (executionTimeMs / 1000).toFixed(1);
+    console.log(`⏱️ Total processing completed in ${executionTimeSec}s`);
     let runCommand = '';
     if (language === 'Python') {
         runCommand = `python3 -m pytest test_${moduleName}.py --cov=${moduleName} --cov-report=term-missing`;
@@ -341,7 +339,8 @@ async function generateTestsWithCoverage(request) {
         summaryTable,
         missingLines,
         suggestions: generateSuggestions(finalCoverage, coverageTarget, finalTestPassed),
-        testPassed: finalTestPassed
+        testPassed: finalTestPassed,
+        executionTimeSec
     };
     return {
         status: 'success',
@@ -349,6 +348,7 @@ async function generateTestsWithCoverage(request) {
         coverageReport,
         modelUsed,
         fallbackUsed,
-        fallbackReason
+        fallbackReason,
+        executionTimeSec
     };
 }

@@ -245,6 +245,7 @@ async function generateTestsForChunks(
 export async function generateTestsWithCoverage(
   request: GenerateTestsRequestDTO
 ): Promise<GenerateTestsResponseDTO> {
+  const startTime = Date.now();
   const sourceCode = (request.code || '').trim();
   const language = request.language || 'JavaScript';
   const framework = request.framework || 'Jest';
@@ -393,13 +394,8 @@ export async function generateTestsWithCoverage(
             newCode = fixPythonImports(newCode, moduleName);
           }
 
-          if (testPassed) {
-            // Enhancement pass: merge new tests into existing passing test suite to preserve coverage
-            testCode = mergeTestChunks([testCode, newCode], language);
-          } else {
-            // Repair pass: replace with corrected test file
-            testCode = newCode;
-          }
+          // Always merge new/repaired test blocks into testCode to PRESERVE all previously passing tests!
+          testCode = mergeTestChunks([testCode, newCode], language);
         } else {
           console.warn('Failed to receive response from LLM during refinement pass');
           break;
@@ -411,6 +407,10 @@ export async function generateTestsWithCoverage(
   }
 
   // ── Step 3: Build response ──────────────────────────────────────────────
+
+  const executionTimeMs = Date.now() - startTime;
+  const executionTimeSec = (executionTimeMs / 1000).toFixed(1);
+  console.log(`⏱️ Total processing completed in ${executionTimeSec}s`);
 
   let runCommand = '';
   if (language === 'Python') {
@@ -436,7 +436,8 @@ export async function generateTestsWithCoverage(
     summaryTable,
     missingLines,
     suggestions: generateSuggestions(finalCoverage, coverageTarget, finalTestPassed),
-    testPassed: finalTestPassed
+    testPassed: finalTestPassed,
+    executionTimeSec
   };
 
   return {
@@ -445,6 +446,7 @@ export async function generateTestsWithCoverage(
     coverageReport,
     modelUsed,
     fallbackUsed,
-    fallbackReason
+    fallbackReason,
+    executionTimeSec
   };
 }

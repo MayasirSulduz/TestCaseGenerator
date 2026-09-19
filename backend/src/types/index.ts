@@ -24,6 +24,7 @@ export interface CoverageReportDTO {
   missingLines: string;
   suggestions: string[];
   testPassed?: boolean;
+  executionTimeSec?: string;
 }
 
 export interface GenerateTestsResponseDTO {
@@ -34,6 +35,7 @@ export interface GenerateTestsResponseDTO {
   modelUsed?: string;
   fallbackUsed?: boolean;
   fallbackReason?: string;
+  executionTimeSec?: string;
 }
 
 export interface DetectFrameworkRequestDTO {

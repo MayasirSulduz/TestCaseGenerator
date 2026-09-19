@@ -91,38 +91,93 @@ export function mergeTestChunks(
 }
 
 /**
- * Python-specific merge: gather imports at the top and cleanly append test blocks,
- * preserving indentation and AST structure without creating SyntaxErrors.
+ * Python-specific merge: gather imports at the top, deduplicate function definitions,
+ * and filter out incomplete/truncated function stubs caused by LLM token limits.
  */
-function mergePythonTests(imports: string[], bodies: string[]): string {
-  const finalImports = new Set<string>(imports);
-  const cleanBlocks: string[] = [];
+function mergePythonTests(initialImports: string[], chunks: string[]): string {
+  const finalImports = new Set<string>(initialImports);
+  const functionMap = new Map<string, string>(); // funcName -> fullCode
+  const otherStatements: string[] = [];
 
-  for (const body of bodies) {
-    const lines = body.split('\n');
-    const nonImportLines: string[] = [];
+  for (const chunk of chunks) {
+    const lines = chunk.split('\n');
+    let currentDecorators: string[] = [];
+    let currentFuncName: string | null = null;
+    let currentFuncLines: string[] = [];
 
-    for (const line of lines) {
+    const flushCurrentFunc = () => {
+      if (currentFuncName && currentFuncLines.length > 0) {
+        const fullFuncCode = [...currentDecorators, ...currentFuncLines].join('\n');
+        
+        // Validate if function is complete (has at least 1 indented statement or valid body line)
+        const bodyLines = currentFuncLines.slice(1).filter(l => l.trim().length > 0 && !l.trim().startsWith('#'));
+        const hasBody = bodyLines.length > 0 && bodyLines.some(l => l.startsWith(' ') || l.startsWith('\t'));
+        const lastLine = currentFuncLines[currentFuncLines.length - 1].trim();
+        const isTruncated = lastLine.endsWith('def') || lastLine.endsWith('(') || lastLine.endsWith('=') || lastLine.endsWith(',') || !hasBody;
+
+        if (!isTruncated) {
+          const existing = functionMap.get(currentFuncName);
+          // Keep the existing complete function or overwrite if new version is longer/more complete
+          if (!existing || fullFuncCode.length >= existing.length) {
+            functionMap.set(currentFuncName, fullFuncCode);
+          }
+        }
+      }
+      currentDecorators = [];
+      currentFuncName = null;
+      currentFuncLines = [];
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
       if (isImportLine(line, 'python')) {
-        finalImports.add(line.trim());
+        finalImports.add(trimmed);
+        continue;
+      }
+
+      if (trimmed.startsWith('@')) {
+        if (currentFuncName) flushCurrentFunc();
+        currentDecorators.push(line);
+        continue;
+      }
+
+      const defMatch = line.match(/^(\s*)(async\s+)?(def|class)\s+(\w+)/);
+      if (defMatch && defMatch[1].length === 0) { // Top-level def or class
+        if (currentFuncName) flushCurrentFunc();
+        currentFuncName = defMatch[4];
+        currentFuncLines.push(line);
+        continue;
+      }
+
+      if (currentFuncName) {
+        if (line.startsWith(' ') || line.startsWith('\t') || trimmed === '') {
+          currentFuncLines.push(line);
+        } else {
+          flushCurrentFunc();
+          if (trimmed.length > 0 && !trimmed.startsWith('#') && !trimmed.startsWith('=')) {
+            otherStatements.push(line);
+          }
+        }
       } else {
-        nonImportLines.push(line);
+        if (trimmed.length > 0 && !trimmed.startsWith('#') && !trimmed.startsWith('=')) {
+          otherStatements.push(line);
+        }
       }
     }
-
-    const chunkContent = nonImportLines.join('\n').trim();
-    if (chunkContent) {
-      cleanBlocks.push(chunkContent);
-    }
+    flushCurrentFunc();
   }
 
   const sortedImports = Array.from(finalImports).sort();
+  const sortedFunctions = Array.from(functionMap.values());
 
   return [
     ...sortedImports,
     '',
     '',
-    cleanBlocks.join('\n\n')
+    ...(otherStatements.length ? [otherStatements.join('\n'), ''] : []),
+    sortedFunctions.join('\n\n')
   ].join('\n');
 }
 

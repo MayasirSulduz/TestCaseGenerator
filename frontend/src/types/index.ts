@@ -5,6 +5,7 @@ export interface CoverageReport {
   missingLines: string;
   suggestions: string[];
   testPassed?: boolean;
+  executionTimeSec?: string;
 }
 
 export interface FrameworkDetectionResult {
@@ -24,6 +25,7 @@ export interface GenerateTestsResult {
   modelUsed?: string;
   fallbackUsed?: boolean;
   fallbackReason?: string;
+  executionTimeSec?: string;
 }
 
 export interface HealthCheckResult {
