@@ -20,15 +20,15 @@ function shouldChunk(sourceCode) {
  * Split source code into logical chunks by grouping functions/classes.
  * Target chunk size is ~2000 tokens (~500 lines).
  */
-function chunkCode(sourceCode, language) {
+function chunkCode(sourceCode, language, numChunks = 7) {
     const lines = sourceCode.split('\n');
     // Detect logical boundaries per language
     const boundaries = detectBoundaries(lines, language);
-    if (boundaries.length <= 1) {
-        // No meaningful boundaries found — fall back to line-based splitting
-        return splitByLines(lines);
+    if (boundaries.length < numChunks) {
+        // No sufficient boundaries found — fall back to line-based splitting into numChunks parts
+        return splitByLines(lines, numChunks);
     }
-    return splitByBoundaries(lines, boundaries);
+    return splitByBoundaries(lines, boundaries, numChunks);
 }
 /**
  * Merge multiple test code strings into a single combined test file.
@@ -46,7 +46,7 @@ function mergeTestChunks(chunks, language) {
         const bodyLines = [];
         for (const line of lines) {
             if (isImportLine(line, language)) {
-                imports.add(line);
+                imports.add(line.trim());
             }
             else {
                 bodyLines.push(line);
@@ -58,10 +58,45 @@ function mergeTestChunks(chunks, language) {
         }
     }
     const sortedImports = [...imports].sort();
+    // For Python: safely combine imports at top and append test blocks cleanly
+    if (language.toLowerCase() === 'python') {
+        return mergePythonTests(sortedImports, testBodies);
+    }
     return [
         ...sortedImports,
         '',
         ...testBodies
+    ].join('\n\n');
+}
+/**
+ * Python-specific merge: gather imports at the top and cleanly append test blocks,
+ * preserving indentation and AST structure without creating SyntaxErrors.
+ */
+function mergePythonTests(imports, bodies) {
+    const finalImports = new Set(imports);
+    const cleanBlocks = [];
+    for (const body of bodies) {
+        const lines = body.split('\n');
+        const nonImportLines = [];
+        for (const line of lines) {
+            if (isImportLine(line, 'python')) {
+                finalImports.add(line.trim());
+            }
+            else {
+                nonImportLines.push(line);
+            }
+        }
+        const chunkContent = nonImportLines.join('\n').trim();
+        if (chunkContent) {
+            cleanBlocks.push(chunkContent);
+        }
+    }
+    const sortedImports = Array.from(finalImports).sort();
+    return [
+        ...sortedImports,
+        '',
+        '',
+        cleanBlocks.join('\n\n')
     ].join('\n');
 }
 function detectBoundaries(lines, language) {
@@ -94,11 +129,12 @@ function detectBoundaries(lines, language) {
     return boundaries;
 }
 /**
- * Group consecutive boundaries into optimal chunk sizes (~2000 tokens / 500 lines).
+ * Group consecutive boundaries into numChunks (default 7) parts.
  */
-function splitByBoundaries(lines, boundaries) {
+function splitByBoundaries(lines, boundaries, numChunks = 7) {
     const chunks = [];
-    // File-level imports/header before first boundary
+    const totalLines = lines.length;
+    const targetLinesPerChunk = Math.ceil(totalLines / numChunks);
     const headerEnd = boundaries[0].line;
     const header = headerEnd > 0 ? lines.slice(0, headerEnd).join('\n') : '';
     let currentStartLine = boundaries[0].line;
@@ -106,16 +142,17 @@ function splitByBoundaries(lines, boundaries) {
     let currentLines = [];
     for (let i = 0; i < boundaries.length; i++) {
         const start = boundaries[i].line;
-        const end = i + 1 < boundaries.length ? boundaries[i + 1].line : lines.length;
+        const end = i + 1 < boundaries.length ? boundaries[i + 1].line : totalLines;
         const blockLines = lines.slice(start, end);
         currentNames.push(boundaries[i].name);
         currentLines.push(...blockLines);
-        const candidateCode = header ? header + '\n\n' + currentLines.join('\n') : currentLines.join('\n');
-        const tokenCount = (0, llm_service_1.estimateTokenCount)(candidateCode);
-        const isLast = i === boundaries.length - 1;
-        if (tokenCount >= TARGET_CHUNK_TOKENS || isLast) {
-            const firstName = currentNames[0];
-            const lastName = currentNames[currentNames.length - 1];
+        const isLastBoundary = i === boundaries.length - 1;
+        const chunkFull = currentLines.length >= targetLinesPerChunk;
+        const haveReachedNumChunksLimit = chunks.length === numChunks - 1;
+        if ((chunkFull && !haveReachedNumChunksLimit) || isLastBoundary) {
+            const candidateCode = header ? header + '\n\n' + currentLines.join('\n') : currentLines.join('\n');
+            const firstName = currentNames[0] || `Part ${chunks.length + 1}`;
+            const lastName = currentNames[currentNames.length - 1] || firstName;
             const chunkName = currentNames.length > 1 ? `${firstName} to ${lastName}` : firstName;
             chunks.push({
                 code: candidateCode,
@@ -123,24 +160,24 @@ function splitByBoundaries(lines, boundaries) {
                 endLine: end,
                 name: chunkName
             });
-            // Reset for next chunk
             currentStartLine = end;
             currentNames = [];
             currentLines = [];
         }
     }
-    return chunks.length > 0 ? chunks : splitByLines(lines);
+    return chunks.length > 0 ? chunks : splitByLines(lines, numChunks);
 }
-function splitByLines(lines) {
-    const linesPerChunk = 450; // ~1800 tokens per chunk
+function splitByLines(lines, numChunks = 7) {
+    const linesPerChunk = Math.max(1, Math.ceil(lines.length / numChunks));
     const chunks = [];
     for (let i = 0; i < lines.length; i += linesPerChunk) {
         const end = Math.min(i + linesPerChunk, lines.length);
+        const chunkNum = chunks.length + 1;
         chunks.push({
             code: lines.slice(i, end).join('\n'),
             startLine: i + 1,
             endLine: end,
-            name: `lines_${i + 1}_to_${end}`
+            name: `Part ${chunkNum}/${numChunks} (lines ${i + 1}-${end})`
         });
     }
     return chunks;

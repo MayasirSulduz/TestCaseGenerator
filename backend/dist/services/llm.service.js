@@ -47,31 +47,26 @@ function estimateTokenCount(text) {
 }
 // ── Truncation Detection ──────────────────────────────────────────────────────
 /**
- * Detects if the LLM output appears to be truncated mid-code.
- * Common signs: ends mid-function, unmatched braces, ends with keywords.
+ * Detects if the LLM output is OBVIOUSLY truncated mid-code.
+ * Very conservative — only flags the most blatant cases to avoid
+ * false positives that waste rate limit budget.
  */
 function isOutputTruncated(content) {
     const trimmed = content.trimEnd();
-    if (!trimmed || trimmed.length < 50)
+    if (!trimmed || trimmed.length < 80)
         return false;
-    // Get the last meaningful line
-    const lines = trimmed.split('\n');
+    // Get the last non-empty line
+    const lines = trimmed.split('\n').filter(l => l.trim().length > 0);
+    if (lines.length === 0)
+        return false;
     const lastLine = lines[lines.length - 1].trim();
-    // Check if it ends with a keyword that expects more code
-    const truncatedEndings = /^(def|class|if|elif|else|for|while|try|except|with|return|import|from|async|await|function|const|let|var|export)\s*$/;
-    if (truncatedEndings.test(lastLine))
+    // Only flag if the last line is a bare keyword with nothing after it
+    // e.g. "def " or "def test_something" (no colon, no body)
+    if (/^(def|class)\s+\w+\s*$/.test(lastLine))
         return true;
-    // Check if it ends with an incomplete function signature
-    if (/def\s+\w+\s*\(.*$/.test(lastLine) && !lastLine.includes(':'))
+    // Bare keyword on its own line with nothing else
+    if (/^(def|class|if|elif|for|while|try|except|with)\s*$/.test(lastLine))
         return true;
-    // Check if last line ends mid-expression (e.g. "assert find_max" or "self.")
-    if (/\.\s*$/.test(lastLine) || /=\s*$/.test(lastLine))
-        return true;
-    // Check for unmatched braces/brackets (JS/TS/Java)
-    const opens = (trimmed.match(/[{(]/g) || []).length;
-    const closes = (trimmed.match(/[})]/g) || []).length;
-    if (opens > closes + 3)
-        return true; // allow small mismatch for string content
     return false;
 }
 // ── Provider-Specific API Callers ─────────────────────────────────────────────

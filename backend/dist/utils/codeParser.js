@@ -3,14 +3,22 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractCodeFromMarkdown = extractCodeFromMarkdown;
 exports.sanitizeTestImports = sanitizeTestImports;
 exports.fixPythonImports = fixPythonImports;
+/**
+ * Extract code from LLM response that may be wrapped in markdown code fences.
+ * Handles: ```python\n...\n```, ```\n...\n```, and bare code.
+ */
 function extractCodeFromMarkdown(text) {
-    let cleaned = text.replace(/^```[\w]*\n/gm, '');
-    cleaned = cleaned.replace(/\n```$/gm, '');
-    cleaned = cleaned.trim();
-    if (cleaned.startsWith('```') && cleaned.endsWith('```')) {
-        const lines = cleaned.split('\n');
-        cleaned = lines.slice(1, -1).join('\n');
+    if (!text)
+        return '';
+    // Try to extract from fenced code blocks (```python ... ``` or ``` ... ```)
+    const fenceMatch = text.match(/```[\w]*\s*\n([\s\S]*?)```/);
+    if (fenceMatch && fenceMatch[1]) {
+        return fenceMatch[1].trim();
     }
+    // Remove any remaining isolated ``` markers
+    let cleaned = text.replace(/^```[\w]*\s*$/gm, '');
+    cleaned = cleaned.replace(/^```\s*$/gm, '');
+    cleaned = cleaned.trim();
     return cleaned;
 }
 function sanitizeTestImports(testCode) {
@@ -20,16 +28,18 @@ function sanitizeTestImports(testCode) {
     return cleaned;
 }
 function fixPythonImports(testCode, correctModuleName) {
+    let formatted = testCode;
+    // 1. Fix function definitions with spaces in name (e.g. `def test_foo bar(` -> `def test_foo_bar(`)
+    formatted = formatted.replace(/^(\s*def\s+test_[\w\s]+?)\s+(\w+)\s*\(/gm, (_match, prefix, rest) => {
+        return prefix.replace(/\s+/g, '_') + '_' + rest + '(';
+    });
     const wrongPatterns = [
         /from your_module import/gi,
         /from module import/gi,
         /from source import/gi,
-        /from app import/gi,
-        /from main import/gi,
         /import your_module/gi,
         /import module/gi
     ];
-    let formatted = testCode;
     for (const pattern of wrongPatterns) {
         formatted = formatted.replace(pattern, `from ${correctModuleName} import`);
     }

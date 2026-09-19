@@ -78,30 +78,30 @@ Generate the complete test file:
 `;
 }
 function buildRepairPrompt(sourceCode, testCode, errOutput, language, framework, filename) {
-    const safeSource = truncateCodeForPrompt(sourceCode, 200);
-    const safeTests = truncateCodeForPrompt(testCode, 250);
-    const safeErr = (errOutput || '').slice(0, 1200);
-    return `The generated ${framework} test suite failed during local execution.
+    const moduleName = filename.replace(/\.(py|java|js|ts|jsx|tsx)$/i, '').replace(/-/g, '_');
+    const safeErr = (errOutput || '').slice(0, 2000);
+    return `The generated ${framework} test suite for ${language} failed during local execution.
+
+Module name: ${moduleName}
+Filename: ${filename}
 
 Test Execution Error Output:
 \`\`\`
 ${safeErr}
 \`\`\`
 
-Source Code Excerpt (filename: ${filename}):
+Current Failing Test Code:
 \`\`\`${language.toLowerCase()}
-${safeSource}
+${testCode}
 \`\`\`
 
-Current Failing Tests Excerpt:
-\`\`\`${language.toLowerCase()}
-${safeTests}
-\`\`\`
-
-CRITICAL: FIX the test code so that ALL tests pass cleanly with ZERO errors!
-- Fix broken assertions, component mocks, syntax errors, and missing imports.
-- Make sure all test cases pass.
-- Return ONLY the complete corrected test file with no markdown formatting.
+CRITICAL INSTRUCTIONS:
+1. FIX the test code so ALL tests pass with ZERO errors.
+2. For Python: The import MUST be: from ${moduleName} import *
+3. Fix any import errors, syntax errors, wrong function names, wrong arguments.
+4. Look at the error output carefully — fix the EXACT issue it describes.
+5. Do NOT invent functions that don't exist in the source. Only test functions from the source.
+6. Return ONLY the complete corrected test file. No markdown formatting, no explanations.
 `;
 }
 function buildEnhancementPrompt(sourceCode, testCode, currentCoverage, targetCoverage, missingLines, language, moduleName) {
@@ -136,19 +136,19 @@ Requirements:
 }
 // ── Chunked Generation ────────────────────────────────────────────────────────
 async function generateTestsForChunks(sourceCode, language, framework, coverageTarget, filename, moduleName) {
-    const chunks = (0, chunker_service_1.chunkCode)(sourceCode, language);
-    console.log(`📦 Large file detected — splitting into ${chunks.length} chunks`);
+    const chunks = (0, chunker_service_1.chunkCode)(sourceCode, language, 7);
+    console.log(`📦 Large file detected — splitting into ${chunks.length} chunks (7 parts)`);
     const chunkResults = [];
     let lastLLMResult = null;
     const allFailures = [];
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
-        console.log(`  📝 Chunk ${i + 1}/${chunks.length}: ${chunk.name} (lines ${chunk.startLine}-${chunk.endLine})`);
+        console.log(`  📝 Part ${i + 1}/${chunks.length}: ${chunk.name} (lines ${chunk.startLine}-${chunk.endLine})`);
         const chunkPrompt = buildInitialPrompt(chunk.code, language, framework, coverageTarget, filename, moduleName);
         const result = await (0, llm_service_1.callLLMWithFallback)(chunkPrompt, 2000);
         if (!result) {
-            console.warn(`  ⚠ Chunk ${i + 1} failed — skipping`);
-            allFailures.push(`Chunk ${i + 1} (${chunk.name}): all fallback models failed`);
+            console.warn(`  ⚠ Part ${i + 1} failed — skipping`);
+            allFailures.push(`Part ${i + 1} (${chunk.name}): all fallback models failed`);
             continue;
         }
         lastLLMResult = result;
@@ -157,11 +157,12 @@ async function generateTestsForChunks(sourceCode, language, framework, coverageT
             code = (0, codeParser_1.fixPythonImports)(code, moduleName);
         }
         chunkResults.push(code);
-        // Pause between chunks — Qwen OTPM resets per minute, so we wait
-        // long enough for the output-token bucket to partially refill
+        console.log(`  ✓ Part ${i + 1}/${chunks.length} testcases generated and appended successfully!`);
+        // Pause between chunks — Gemini free tier has low RPM, Groq has low TPM.
+        // 10s gap balances rate limit recovery with total generation time.
         if (i < chunks.length - 1) {
-            const waitSec = 8;
-            console.log(`  ⏳ Waiting ${waitSec}s before next chunk (rate limit cooldown)...`);
+            const waitSec = 10;
+            console.log(`  ⏳ Waiting ${waitSec}s before next part (rate limit cooldown)...`);
             await delay(waitSec * 1000);
         }
     }
@@ -169,6 +170,7 @@ async function generateTestsForChunks(sourceCode, language, framework, coverageT
         return null;
     }
     const mergedCode = (0, chunker_service_1.mergeTestChunks)(chunkResults, language);
+    console.log(`  ✅ All ${chunks.length} parts generated and merged into complete test suite!`);
     return { testCode: mergedCode, llmResult: lastLLMResult, allFailures };
 }
 // ── Main Entry Point ──────────────────────────────────────────────────────────
@@ -243,6 +245,18 @@ async function generateTestsWithCoverage(request) {
             const currentCoverage = coverageResult.coverage || 0;
             const testPassed = Boolean(coverageResult.test_passed);
             console.log(`Current Coverage: ${currentCoverage}% | Tests Passed: ${testPassed}`);
+            // ── Diagnostic: Log pytest output when tests fail ──
+            if (!testPassed) {
+                const errSnippet = (coverageResult.stderr || coverageResult.stdout || coverageResult.error || '').slice(0, 2000);
+                console.log(`\n  ── Pytest Error Output ──`);
+                console.log(errSnippet);
+                console.log(`  ── End Pytest Error ──`);
+                // Log first 15 lines of generated test code for diagnosis
+                const testLines = testCode.split('\n').slice(0, 15).join('\n');
+                console.log(`\n  ── Generated Test Code (first 15 lines) ──`);
+                console.log(testLines);
+                console.log(`  ── End Test Code Snippet ──\n`);
+            }
             // Stop loop if target coverage achieved and all tests passed cleanly
             if (testPassed && currentCoverage >= coverageTarget) {
                 console.log(`✓ Target coverage ${coverageTarget}% achieved and tests passed!`);
