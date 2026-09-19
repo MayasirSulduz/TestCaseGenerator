@@ -1,4 +1,4 @@
-export type ModelProvider = 'groq' | 'gemini';
+export type ModelProvider = 'groq' | 'gemini' | 'mistral';
 
 export interface ModelConfig {
   id: string;
@@ -8,8 +8,6 @@ export interface ModelConfig {
   maxOutputTokens: number;
   /**
    * Hard cap on max_tokens we send in the API request for this model.
-   * For Groq free tier, this must be ≤ the OTPM (Output Tokens Per Minute) limit,
-   * otherwise EVERY request fails with "Request too large" before even starting.
    */
   maxRequestTokens: number;
   /** Tokens-per-minute limit on the free tier (approximate). */
@@ -17,12 +15,7 @@ export interface ModelConfig {
 }
 
 /**
- * Ordered fallback chain — tried from first to last.
- *
- * Gemini 3.6 Flash is first because it has the highest capacity
- * (1M TPM, 65K max output) and won't truncate test code.
- * Groq models are fallback only — their free-tier OTPM limits
- * are too low for generating comprehensive test suites.
+ * Ordered fallback chain across Gemini, Mistral AI, and Groq providers.
  */
 export const MODEL_CHAIN: ModelConfig[] = [
   {
@@ -35,6 +28,24 @@ export const MODEL_CHAIN: ModelConfig[] = [
     freeTierTPM: 1_000_000
   },
   {
+    id: 'codestral-latest',
+    provider: 'mistral',
+    displayName: 'Codestral (Mistral AI)',
+    contextWindow: 32_768,
+    maxOutputTokens: 8_192,
+    maxRequestTokens: 4_096,
+    freeTierTPM: 100_000
+  },
+  {
+    id: 'mistral-small-latest',
+    provider: 'mistral',
+    displayName: 'Mistral Small (Mistral AI)',
+    contextWindow: 32_768,
+    maxOutputTokens: 8_192,
+    maxRequestTokens: 4_096,
+    freeTierTPM: 100_000
+  },
+  {
     id: 'openai/gpt-oss-120b',
     provider: 'groq',
     displayName: 'GPT-OSS 120B',
@@ -44,12 +55,21 @@ export const MODEL_CHAIN: ModelConfig[] = [
     freeTierTPM: 8_000
   },
   {
+    id: 'openai/gpt-oss-20b',
+    provider: 'groq',
+    displayName: 'GPT-OSS 20B',
+    contextWindow: 131_072,
+    maxOutputTokens: 8_192,
+    maxRequestTokens: 3_000,
+    freeTierTPM: 30_000
+  },
+  {
     id: 'qwen/qwen3.8-27b',
     provider: 'groq',
     displayName: 'Qwen 3.8 27B',
     contextWindow: 131_072,
     maxOutputTokens: 8_192,
-    maxRequestTokens: 900,     // OTPM hard limit is 1,000 — stay safely under
+    maxRequestTokens: 900,
     freeTierTPM: 30_000
   }
 ];

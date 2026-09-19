@@ -79,11 +79,17 @@ Generate the complete test file:
 }
 function buildRepairPrompt(sourceCode, testCode, errOutput, language, framework, filename) {
     const moduleName = filename.replace(/\.(py|java|js|ts|jsx|tsx)$/i, '').replace(/-/g, '_');
-    const safeErr = (errOutput || '').slice(0, 2000);
+    const safeErr = (errOutput || '').length > 3000 ? (errOutput || '').slice(-3000) : (errOutput || '');
+    const safeSource = truncateCodeForPrompt(sourceCode, 350);
     return `The generated ${framework} test suite for ${language} failed during local execution.
 
 Module name: ${moduleName}
 Filename: ${filename}
+
+Source Code (Reference Implementation):
+\`\`\`${language.toLowerCase()}
+${safeSource}
+\`\`\`
 
 Test Execution Error Output:
 \`\`\`
@@ -96,12 +102,11 @@ ${testCode}
 \`\`\`
 
 CRITICAL INSTRUCTIONS:
-1. FIX the test code so ALL tests pass with ZERO errors.
-2. For Python: The import MUST be: from ${moduleName} import *
-3. Fix any import errors, syntax errors, wrong function names, wrong arguments.
-4. Look at the error output carefully — fix the EXACT issue it describes.
-5. Do NOT invent functions that don't exist in the source. Only test functions from the source.
-6. Return ONLY the complete corrected test file. No markdown formatting, no explanations.
+1. Compare the assertions in failing tests against the actual Source Code implementation above.
+2. FIX all assertion errors, return value mismatches, wrong function signatures, and wrong arguments.
+3. For Python: Ensure imports include: from ${moduleName} import * and import ${moduleName}
+4. Look at the error output carefully — fix the EXACT issue described in each failed test.
+5. Return ONLY the complete corrected test file with ALL tests. No markdown formatting, no explanations.
 `;
 }
 function buildEnhancementPrompt(sourceCode, testCode, currentCoverage, targetCoverage, missingLines, language, moduleName) {
@@ -161,7 +166,7 @@ async function generateTestsForChunks(sourceCode, language, framework, coverageT
         // Pause between chunks — Gemini free tier has low RPM, Groq has low TPM.
         // 10s gap balances rate limit recovery with total generation time.
         if (i < chunks.length - 1) {
-            const waitSec = 10;
+            const waitSec = 4;
             console.log(`  ⏳ Waiting ${waitSec}s before next part (rate limit cooldown)...`);
             await delay(waitSec * 1000);
         }
@@ -169,7 +174,10 @@ async function generateTestsForChunks(sourceCode, language, framework, coverageT
     if (chunkResults.length === 0 || !lastLLMResult) {
         return null;
     }
-    const mergedCode = (0, chunker_service_1.mergeTestChunks)(chunkResults, language);
+    let mergedCode = (0, chunker_service_1.mergeTestChunks)(chunkResults, language);
+    if (language === 'Python') {
+        mergedCode = (0, codeParser_1.fixPythonImports)(mergedCode, moduleName);
+    }
     console.log(`  ✅ All ${chunks.length} parts generated and merged into complete test suite!`);
     return { testCode: mergedCode, llmResult: lastLLMResult, allFailures };
 }
@@ -247,9 +255,11 @@ async function generateTestsWithCoverage(request) {
             console.log(`Current Coverage: ${currentCoverage}% | Tests Passed: ${testPassed}`);
             // ── Diagnostic: Log pytest output when tests fail ──
             if (!testPassed) {
-                const errSnippet = (coverageResult.stderr || coverageResult.stdout || coverageResult.error || '').slice(0, 2000);
+                const fullErr = (coverageResult.stderr || coverageResult.stdout || coverageResult.error || '');
+                // Extract the tail (last 2500 chars) where pytest prints exception tracebacks & syntax error line numbers
+                const errTail = fullErr.length > 2500 ? '... [truncated top] ...\n' + fullErr.slice(-2500) : fullErr;
                 console.log(`\n  ── Pytest Error Output ──`);
-                console.log(errSnippet);
+                console.log(errTail);
                 console.log(`  ── End Pytest Error ──`);
                 // Log first 15 lines of generated test code for diagnosis
                 const testLines = testCode.split('\n').slice(0, 15).join('\n');
@@ -266,7 +276,8 @@ async function generateTestsWithCoverage(request) {
                 let nextPrompt = '';
                 if (!testPassed) {
                     console.log(`⚠️ Test execution failed. Triggering AI Auto-Repair Agent...`);
-                    const errOutput = coverageResult.stderr || coverageResult.stdout || coverageResult.error || 'Test suite failed execution';
+                    const fullErr = coverageResult.stderr || coverageResult.stdout || coverageResult.error || 'Test suite failed execution';
+                    const errOutput = fullErr.length > 3000 ? fullErr.slice(-3000) : fullErr;
                     nextPrompt = buildRepairPrompt(sourceCode, testCode, errOutput, language, framework, filename);
                 }
                 else {
@@ -274,8 +285,8 @@ async function generateTestsWithCoverage(request) {
                     const missingLines = coverageResult.missing_lines || 'All lines';
                     nextPrompt = buildEnhancementPrompt(sourceCode, testCode, currentCoverage, coverageTarget, missingLines, language, moduleName);
                 }
-                // Brief cooldown before hitting the LLM again for refinement
-                await delay(5000);
+                // Brief cooldown before hitting LLM again for refinement pass
+                await delay(4000);
                 const improvedResult = await (0, llm_service_1.callLLMWithFallback)(nextPrompt, 3000);
                 if (improvedResult) {
                     if (improvedResult.fallbackUsed && !fallbackUsed) {
@@ -283,9 +294,17 @@ async function generateTestsWithCoverage(request) {
                         fallbackReason = improvedResult.fallbackReason;
                     }
                     modelUsed = improvedResult.modelUsed;
-                    testCode = (0, codeParser_1.sanitizeTestImports)((0, codeParser_1.extractCodeFromMarkdown)(improvedResult.content));
+                    let newCode = (0, codeParser_1.sanitizeTestImports)((0, codeParser_1.extractCodeFromMarkdown)(improvedResult.content));
                     if (language === 'Python') {
-                        testCode = (0, codeParser_1.fixPythonImports)(testCode, moduleName);
+                        newCode = (0, codeParser_1.fixPythonImports)(newCode, moduleName);
+                    }
+                    if (testPassed) {
+                        // Enhancement pass: merge new tests into existing passing test suite to preserve coverage
+                        testCode = (0, chunker_service_1.mergeTestChunks)([testCode, newCode], language);
+                    }
+                    else {
+                        // Repair pass: replace with corrected test file
+                        testCode = newCode;
                     }
                 }
                 else {

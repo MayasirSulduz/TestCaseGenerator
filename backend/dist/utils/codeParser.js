@@ -43,19 +43,22 @@ function fixPythonImports(testCode, correctModuleName) {
     for (const pattern of wrongPatterns) {
         formatted = formatted.replace(pattern, `from ${correctModuleName} import`);
     }
-    const hasImport = formatted.includes(`from ${correctModuleName} import`) ||
-        formatted.includes(`import ${correctModuleName}`);
-    if (!hasImport) {
-        const lines = formatted.split('\n');
-        let importIndex = 0;
-        for (let i = 0; i < lines.length; i++) {
-            const trimmed = lines[i].trim();
-            if (trimmed.startsWith('import ') || trimmed.startsWith('from ')) {
-                importIndex = i + 1;
-            }
+    // Ensure BOTH `from <module> import *` AND `import <module>` exist
+    const hasFromStar = new RegExp(`from\\s+${correctModuleName}\\s+import`, 'i').test(formatted);
+    const hasImportModule = new RegExp(`import\\s+${correctModuleName}\\b`, 'i').test(formatted);
+    const lines = formatted.split('\n');
+    let importIndex = 0;
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trim();
+        if (trimmed.startsWith('import ') || trimmed.startsWith('from ')) {
+            importIndex = i + 1;
         }
-        lines.splice(importIndex, 0, `from ${correctModuleName} import *`);
-        formatted = lines.join('\n');
     }
-    return formatted;
+    if (!hasImportModule) {
+        lines.splice(importIndex, 0, `import ${correctModuleName}`);
+    }
+    if (!hasFromStar) {
+        lines.splice(importIndex, 0, `from ${correctModuleName} import *`);
+    }
+    return lines.join('\n');
 }

@@ -52,20 +52,7 @@ function estimateTokenCount(text) {
  * false positives that waste rate limit budget.
  */
 function isOutputTruncated(content) {
-    const trimmed = content.trimEnd();
-    if (!trimmed || trimmed.length < 80)
-        return false;
-    // Get the last non-empty line
-    const lines = trimmed.split('\n').filter(l => l.trim().length > 0);
-    if (lines.length === 0)
-        return false;
-    const lastLine = lines[lines.length - 1].trim();
-    // Only flag if the last line is a bare keyword with nothing after it
-    // e.g. "def " or "def test_something" (no colon, no body)
-    if (/^(def|class)\s+\w+\s*$/.test(lastLine))
-        return true;
-    // Bare keyword on its own line with nothing else
-    if (/^(def|class|if|elif|for|while|try|except|with)\s*$/.test(lastLine))
+    if (!content || content.trim().length < 10)
         return true;
     return false;
 }
@@ -134,6 +121,38 @@ async function callGeminiApi(prompt, model, maxTokens) {
     const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
     return text || null;
 }
+async function callMistralApi(prompt, model, maxTokens) {
+    if (!env_config_1.envConfig.mistralApiKey) {
+        return null;
+    }
+    const payload = {
+        model,
+        messages: [
+            {
+                role: 'system',
+                content: 'You are an expert software test engineer who writes comprehensive unit tests.'
+            },
+            {
+                role: 'user',
+                content: prompt
+            }
+        ],
+        temperature: 0.2,
+        max_tokens: maxTokens,
+        top_p: 0.9
+    };
+    const response = await axios_1.default.post(env_config_1.envConfig.mistralApiUrl, payload, {
+        headers: {
+            Authorization: `Bearer ${env_config_1.envConfig.mistralApiKey}`,
+            'Content-Type': 'application/json'
+        },
+        timeout: 90000
+    });
+    if (response.status === 200 && response.data?.choices?.[0]?.message?.content) {
+        return response.data.choices[0].message.content;
+    }
+    return null;
+}
 // ── Rate Limit Checker ────────────────────────────────────────────────────────
 function isRateLimitError(error) {
     const status = error?.response?.status;
@@ -150,18 +169,11 @@ function isApiKeyMissing(model) {
         return !env_config_1.envConfig.groqApiKey;
     if (model.provider === 'gemini')
         return !env_config_1.envConfig.geminiApiKey;
+    if (model.provider === 'mistral')
+        return !env_config_1.envConfig.mistralApiKey;
     return true;
 }
 // ── Fallback Engine ───────────────────────────────────────────────────────────
-/**
- * Core fallback engine trying each model in MODEL_CHAIN order:
- * 1. Qwen 3.8 27B (Groq)    — max_tokens capped to 900 (OTPM=1000)
- * 2. GPT-OSS 120B (Groq)    — max_tokens capped to 3000 (TPM=8000)
- * 3. Gemini 3.6 Flash        — max_tokens up to 8000 (TPM=1M)
- *
- * Each model gets up to 2 attempts (retry on rate-limit with short wait,
- * or retry on "high demand" / network timeout after 5s).
- */
 async function callLLMWithFallback(prompt, maxTokens = 3000) {
     const promptTokens = estimateTokenCount(prompt);
     const failureReasons = [];
@@ -183,9 +195,8 @@ async function callLLMWithFallback(prompt, maxTokens = 3000) {
             continue;
         }
         // 3. Clamp max output tokens to BOTH model.maxOutputTokens AND model.maxRequestTokens
-        //    maxRequestTokens is the OTPM-safe cap so the request never exceeds the per-minute hard limit
         const clampedMaxTokens = Math.min(maxTokens, model.maxOutputTokens, model.maxRequestTokens);
-        // 4. Try API Call (up to 2 attempts with retry on rate-limit or transient errors)
+        // 4. Try API Call (up to 2 attempts with fast backoff on rate-limit or transient errors)
         console.log(`  🤖 Trying ${model.displayName} (${model.id}) [max_tokens=${clampedMaxTokens}]...`);
         let attempt = 0;
         const maxAttempts = 2;
@@ -199,8 +210,10 @@ async function callLLMWithFallback(prompt, maxTokens = 3000) {
                 else if (model.provider === 'gemini') {
                     content = await callGeminiApi(prompt, model.id, clampedMaxTokens);
                 }
+                else if (model.provider === 'mistral') {
+                    content = await callMistralApi(prompt, model.id, clampedMaxTokens);
+                }
                 if (content) {
-                    // Check if the output appears truncated mid-statement
                     if (isOutputTruncated(content)) {
                         const reason = `${model.displayName}: Output truncated (max_tokens=${clampedMaxTokens} too low)`;
                         console.log(`  ⚠ ${model.displayName} — output truncated mid-code, trying next model...`);
@@ -225,17 +238,17 @@ async function callLLMWithFallback(prompt, maxTokens = 3000) {
             catch (error) {
                 const errDetail = error?.response?.data?.error?.message
                     || error?.response?.data?.error?.status
+                    || (typeof error?.response?.data === 'string' ? error.response.data : '')
                     || error?.message
                     || 'Unknown error';
                 // Check if it's a rate-limit error
                 if (isRateLimitError(error)) {
                     if (attempt < maxAttempts) {
-                        const waitMs = parseWaitTimeMs(errDetail);
-                        if (waitMs && waitMs <= 20000) {
-                            console.log(`  ⏳ ${model.displayName} rate limited. Waiting ${(waitMs / 1000).toFixed(1)}s before retry...`);
-                            await delay(waitMs + 1000);
-                            continue;
-                        }
+                        const parsedWaitMs = parseWaitTimeMs(errDetail);
+                        const waitMs = (parsedWaitMs && parsedWaitMs <= 15000) ? parsedWaitMs + 500 : 6000;
+                        console.log(`  ⏳ ${model.displayName} rate limited. Waiting ${(waitMs / 1000).toFixed(1)}s before retry (attempt ${attempt}/${maxAttempts})...`);
+                        await delay(waitMs);
+                        continue;
                     }
                     const reason = `${model.displayName}: Rate limit exceeded`;
                     console.log(`  ⚠ ${model.displayName} — rate limit hit`);
