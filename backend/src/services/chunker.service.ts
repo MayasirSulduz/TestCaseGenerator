@@ -107,12 +107,24 @@ function mergePythonTests(initialImports: string[], chunks: string[]): string {
 
     const flushCurrentFunc = () => {
       if (currentFuncName && currentFuncLines.length > 0) {
+        // Strip trailing incomplete token/statement lines (e.g. 'mock', 'user', 'assert', trailing dot/comma/equals)
+        let lastLine = currentFuncLines[currentFuncLines.length - 1].trim();
+        while (
+          currentFuncLines.length > 1 &&
+          (
+            /^(mock|user|assert|with|if|elif|else|try|except|finally|return|raise|[a-z_]\w*)$/i.test(lastLine) ||
+            /(\.|,|\|\||&&|\+|\-|\*|\/|\=|\(|\[|\{)$/.test(lastLine)
+          )
+        ) {
+          currentFuncLines.pop();
+          lastLine = currentFuncLines[currentFuncLines.length - 1].trim();
+        }
+
         const fullFuncCode = [...currentDecorators, ...currentFuncLines].join('\n');
         
         // Validate if function is complete (has at least 1 indented statement or valid body line)
         const bodyLines = currentFuncLines.slice(1).filter(l => l.trim().length > 0 && !l.trim().startsWith('#'));
         const hasBody = bodyLines.length > 0 && bodyLines.some(l => l.startsWith(' ') || l.startsWith('\t'));
-        const lastLine = currentFuncLines[currentFuncLines.length - 1].trim();
         const isTruncated = lastLine.endsWith('def') || lastLine.endsWith('(') || lastLine.endsWith('=') || lastLine.endsWith(',') || !hasBody;
 
         if (!isTruncated) {
@@ -156,12 +168,12 @@ function mergePythonTests(initialImports: string[], chunks: string[]): string {
           currentFuncLines.push(line);
         } else {
           flushCurrentFunc();
-          if (trimmed.length > 0 && !trimmed.startsWith('#') && !trimmed.startsWith('=')) {
+          if (trimmed.length > 0 && isAllowedTopLevelStatement(line)) {
             otherStatements.push(line);
           }
         }
       } else {
-        if (trimmed.length > 0 && !trimmed.startsWith('#') && !trimmed.startsWith('=')) {
+        if (trimmed.length > 0 && isAllowedTopLevelStatement(line)) {
           otherStatements.push(line);
         }
       }
@@ -179,6 +191,19 @@ function mergePythonTests(initialImports: string[], chunks: string[]): string {
     ...(otherStatements.length ? [otherStatements.join('\n'), ''] : []),
     sortedFunctions.join('\n\n')
   ].join('\n');
+}
+
+function isAllowedTopLevelStatement(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith('#')) return true;
+
+  // Allow global variable assignments like APP_NAME = "..." or pytestmark = ...
+  if (/^[A-Z0-9_]+\s*=\s*/.test(trimmed) || /^pytestmark\s*=\s*/.test(trimmed)) {
+    return true;
+  }
+
+  // Reject orphan assert, with, if, for, while, try, or indented statements at top-level
+  return false;
 }
 
 // ── Internal Helpers ──────────────────────────────────────────────────────────

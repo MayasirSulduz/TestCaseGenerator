@@ -70,6 +70,9 @@ def pytest_pyfunc_call(pyfuncitem):
                 kwargs[param] = pyfuncitem.funcargs[param]
         asyncio.run(pyfuncitem.obj(**kwargs))
         return True
+
+def pytest_configure(config):
+    config.option.asyncio_default_fixture_loop_scope = "function"
 `;
 
 export class PythonRunner implements ITestRunner {
@@ -106,11 +109,29 @@ with open(file_path, 'r', encoding='utf-8') as f:
 lines = code.split('\\n')
 modified = False
 
-# Pass 0: Automatically convert 'def ' to 'async def ' for function blocks containing 'await'
+# Pass 0: Fix top-level function indentation & convert def -> async def if block contains await
+in_class = False
+class_indent = 0
 i = 0
 while i < len(lines):
     line_str = lines[i]
     stripped = line_str.strip()
+    if stripped.startswith('class '):
+        in_class = True
+        class_indent = len(line_str) - len(line_str.lstrip())
+    elif in_class:
+        curr_indent = len(line_str) - len(line_str.lstrip())
+        if curr_indent <= class_indent and stripped and not stripped.startswith('#'):
+            in_class = False
+    
+    # Only fix 1-3 space top-level offsets for def test_ (do NOT unindent @ decorators or inner functions!)
+    if not in_class and stripped.startswith(('def test_', 'async def test_')):
+        leading_spaces = len(line_str) - len(line_str.lstrip())
+        if 1 <= leading_spaces <= 3:
+            lines[i] = stripped
+            modified = True
+            line_str = stripped
+
     if stripped.startswith('def ') and '(' in stripped:
         indent = len(line_str) - len(line_str.lstrip())
         has_await = False
@@ -131,7 +152,17 @@ while i < len(lines):
             modified = True
     i += 1
 
-# Phase 1: AST syntax check (replace syntax error lines with 'pass # [SyntaxError]' to preserve block structure)
+# Pass 0.5: Convert invalid 'nonlocal' statements causing SyntaxError
+for idx in range(len(lines)):
+    if 'nonlocal ' in lines[idx]:
+        lines[idx] = lines[idx].replace('nonlocal ', '# [Sanitized nonlocal] ', 1)
+        modified = True
+
+# Helper function to check if a line has unmatched open brackets/parentheses
+def has_unclosed_brackets(l):
+    return (l.count('(') > l.count(')')) or (l.count('[') > l.count(']')) or (l.count('{') > l.count('}'))
+
+# Phase 1: Robust Block-Level AST Salvage (isolates and comments out failing function blocks)
 for attempt in range(50):
     try:
         ast.parse('\\n'.join(lines))
@@ -139,9 +170,33 @@ for attempt in range(50):
     except SyntaxError as e:
         modified = True
         err_idx = (e.lineno - 1) if (e.lineno and e.lineno <= len(lines)) else (len(lines) - 1)
-        orig_line = lines[err_idx]
-        indent_str = ' ' * (len(orig_line) - len(orig_line.lstrip()))
-        lines[err_idx] = f"{indent_str}pass  # [SyntaxError Fixed] {orig_line.strip()}"
+
+        # Find starting line of enclosing top-level function/class/fixture block
+        func_start = err_idx
+        while func_start > 0:
+            l_str = lines[func_start]
+            l_strip = l_str.strip()
+            if (len(l_str) - len(l_str.lstrip()) == 0) and (
+                l_strip.startswith(('def ', 'async def ', 'class ')) or
+                (l_strip.startswith('@') and func_start + 1 < len(lines) and lines[func_start + 1].strip().startswith(('def ', 'async def ')))
+            ):
+                break
+            func_start -= 1
+
+        # Find ending line of func_start (up to next top-level function/class/decorator or EOF)
+        func_end = func_start + 1
+        while func_end < len(lines):
+            l_str = lines[func_end]
+            l_strip = l_str.strip()
+            if l_strip and not l_strip.startswith('#'):
+                if (len(l_str) - len(l_str.lstrip()) == 0) and l_strip.startswith(('def ', 'async def ', 'class ', '@')):
+                    break
+            func_end += 1
+
+        # Comment out the entire failing function block
+        for k in range(func_start, func_end):
+            if lines[k].strip() and not lines[k].strip().startswith('#'):
+                lines[k] = f"# [Sanitized Failing Block] {lines[k]}"
 
 # Phase 2: Runtime module exec check (comment out top-level lines causing NameError/AttributeError)
 for attempt in range(20):
