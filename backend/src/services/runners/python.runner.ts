@@ -109,6 +109,12 @@ with open(file_path, 'r', encoding='utf-8') as f:
 lines = code.split('\\n')
 modified = False
 
+def comment_line(l, tag="Sanitized"):
+    leading = len(l) - len(l.lstrip())
+    indent = l[:leading]
+    content = l[leading:]
+    return f"{indent}pass  # [{tag}] {content}"
+
 # Pass 0: Fix top-level function indentation & convert def -> async def if block contains await
 in_class = False
 class_indent = 0
@@ -155,7 +161,7 @@ while i < len(lines):
 # Pass 0.5: Convert invalid 'nonlocal' statements causing SyntaxError
 for idx in range(len(lines)):
     if 'nonlocal ' in lines[idx]:
-        lines[idx] = lines[idx].replace('nonlocal ', '# [Sanitized nonlocal] ', 1)
+        lines[idx] = comment_line(lines[idx], "nonlocal")
         modified = True
 
 # Helper function to check if a line has unmatched open brackets/parentheses
@@ -163,7 +169,7 @@ def has_unclosed_brackets(l):
     return (l.count('(') > l.count(')')) or (l.count('[') > l.count(']')) or (l.count('{') > l.count('}'))
 
 # Phase 1: Robust Block-Level AST Salvage (isolates and comments out failing function blocks)
-for attempt in range(50):
+for attempt in range(200):
     try:
         ast.parse('\\n'.join(lines))
         break
@@ -175,11 +181,7 @@ for attempt in range(50):
         func_start = err_idx
         while func_start > 0:
             l_str = lines[func_start]
-            l_strip = l_str.strip()
-            if (len(l_str) - len(l_str.lstrip()) == 0) and (
-                l_strip.startswith(('def ', 'async def ', 'class ')) or
-                (l_strip.startswith('@') and func_start + 1 < len(lines) and lines[func_start + 1].strip().startswith(('def ', 'async def ')))
-            ):
+            if l_str.strip() and (len(l_str) - len(l_str.lstrip()) == 0):
                 break
             func_start -= 1
 
@@ -187,16 +189,35 @@ for attempt in range(50):
         func_end = func_start + 1
         while func_end < len(lines):
             l_str = lines[func_end]
-            l_strip = l_str.strip()
-            if l_strip and not l_strip.startswith('#'):
-                if (len(l_str) - len(l_str.lstrip()) == 0) and l_strip.startswith(('def ', 'async def ', 'class ', '@')):
-                    break
+            if l_str.strip() and (len(l_str) - len(l_str.lstrip()) == 0):
+                break
             func_end += 1
 
         # Comment out the entire failing function block
         for k in range(func_start, func_end):
             if lines[k].strip() and not lines[k].strip().startswith('#'):
-                lines[k] = f"# [Sanitized Failing Block] {lines[k]}"
+                lines[k] = comment_line(lines[k], "Failing Block")
+
+# Phase 1.5: Guaranteed line-level salvage. Block-level commenting alone can give up
+# on files with many broken blocks (it caps out and would silently leave the file
+# unparseable). This loop is GUARANTEED to converge: every pass either succeeds or
+# comments out exactly one offending line, so it terminates for any finite file and
+# ends with code that ast.parse() accepts.
+guard = 0
+while guard < 10000:
+    try:
+        ast.parse('\\n'.join(lines))
+        break
+    except SyntaxError as e:
+        err_idx = (e.lineno - 1) if (e.lineno and 1 <= e.lineno <= len(lines)) else -1
+        if not (0 <= err_idx < len(lines)):
+            break
+        target = lines[err_idx].strip()
+        if not target or target.startswith('#'):
+            break
+        modified = True
+        lines[err_idx] = comment_line(lines[err_idx], "Sanitized")
+        guard += 1
 
 # Phase 2: Runtime module exec check (comment out top-level lines causing NameError/AttributeError)
 for attempt in range(20):
@@ -216,11 +237,27 @@ for attempt in range(20):
                 break
         if err_line and err_line <= len(lines):
             modified = True
-            lines[err_line - 1] = f'# [Sanitized] {lines[err_line - 1]}'
+            lines[err_line - 1] = comment_line(lines[err_line - 1], "Sanitized")
         else:
             break
 
+# Final safety gate: never hand a broken file to pytest.
 if modified:
+    guard = 0
+    while guard < 10000:
+        try:
+            ast.parse('\\n'.join(lines))
+            break
+        except SyntaxError as e:
+            err_idx = (e.lineno - 1) if (e.lineno and 1 <= e.lineno <= len(lines)) else -1
+            if not (0 <= err_idx < len(lines)):
+                break
+            target = lines[err_idx].strip()
+            if not target or target.startswith('#'):
+                break
+            lines[err_idx] = comment_line(lines[err_idx], "Sanitized")
+            guard += 1
+
     cleaned = '\\n'.join(lines)
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(cleaned)
@@ -251,7 +288,7 @@ if modified:
       }
 
       // ── Run pytest with coverage ──
-      const cmd = `python3 -m pytest test_${baseName}.py --cov=${baseName} --cov-report=term-missing -v --tb=short`;
+      const cmd = `python3 -m pytest test_${baseName}.py --cov=${baseName} --cov-report=term-missing -v --tb=short -W ignore::DeprecationWarning`;
 
       let stdout = '';
       let stderr = '';

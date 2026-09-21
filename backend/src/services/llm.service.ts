@@ -34,14 +34,15 @@ function isRetryableError(error: any): boolean {
   const errMsg = typeof errData === 'string'
     ? errData
     : JSON.stringify(errData || '');
+  const sysMsg = `${error?.message || ''} ${error?.code || ''}`;
 
   // "high demand" / "overloaded" / "temporarily unavailable"
   if (/high.?demand|overloaded|temporarily|unavailable|503|server.?error/i.test(errMsg)) {
     return true;
   }
 
-  // Network timeouts
-  if (/ETIMEDOUT|ECONNRESET|ENOTFOUND|ENETUNREACH|socket.?hang/i.test(error?.message || '')) {
+  // Network timeouts, DNS resolution errors (EAI_AGAIN, getaddrinfo, ENOTFOUND, ETIMEDOUT, ECONNRESET)
+  if (/ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|getaddrinfo|ENETUNREACH|socket.?hang|network|fetch.?failed/i.test(sysMsg)) {
     return true;
   }
 

@@ -109,14 +109,58 @@ CRITICAL INSTRUCTIONS:
 5. Return ONLY the complete corrected test file with ALL tests. No markdown formatting, no explanations.
 `;
 }
+function extractMissingLinesContext(sourceCode, missingLinesStr) {
+    if (!missingLinesStr || missingLinesStr === 'None') {
+        return truncateCodeForPrompt(sourceCode, 350);
+    }
+    const lines = sourceCode.split('\n');
+    const targetLineSet = new Set();
+    const parts = missingLinesStr.split(',');
+    for (const part of parts) {
+        const range = part.trim().split('-');
+        if (range.length === 2) {
+            const start = parseInt(range[0], 10);
+            const end = parseInt(range[1], 10);
+            if (!isNaN(start) && !isNaN(end)) {
+                for (let i = start; i <= end; i++)
+                    targetLineSet.add(i);
+            }
+        }
+        else if (range.length === 1) {
+            const lineNum = parseInt(range[0], 10);
+            if (!isNaN(lineNum))
+                targetLineSet.add(lineNum);
+        }
+    }
+    if (targetLineSet.size === 0) {
+        return truncateCodeForPrompt(sourceCode, 350);
+    }
+    const includedLines = new Set();
+    for (const lineNum of targetLineSet) {
+        for (let i = Math.max(1, lineNum - 15); i <= Math.min(lines.length, lineNum + 15); i++) {
+            includedLines.add(i);
+        }
+    }
+    const sortedNums = Array.from(includedLines).sort((a, b) => a - b);
+    const resultLines = [];
+    let prev = 0;
+    for (const num of sortedNums) {
+        if (prev > 0 && num > prev + 1) {
+            resultLines.push(`... [lines ${prev + 1}-${num - 1} skipped] ...`);
+        }
+        resultLines.push(`Line ${num}: ${lines[num - 1]}`);
+        prev = num;
+    }
+    return resultLines.join('\n');
+}
 function buildEnhancementPrompt(sourceCode, testCode, currentCoverage, targetCoverage, missingLines, language, moduleName) {
-    const safeSource = truncateCodeForPrompt(sourceCode, 200);
-    const safeTests = truncateCodeForPrompt(testCode, 250);
+    const safeSource = extractMissingLinesContext(sourceCode, missingLines);
+    const safeTests = truncateCodeForPrompt(testCode, 300);
     return `The current test coverage is ${currentCoverage}%, but we need ${targetCoverage}%.
 
 Missing/Uncovered Lines: ${missingLines}
 
-Source Code Excerpt:
+Source Code Context (focused around missing lines):
 \`\`\`${language.toLowerCase()}
 ${safeSource}
 \`\`\`
@@ -126,17 +170,15 @@ Current Tests Excerpt:
 ${safeTests}
 \`\`\`
 
-CRITICAL: For Python - Your imports MUST use: from ${moduleName} import *
+CRITICAL: For Python - Your imports MUST use: from ${moduleName} import * and import ${moduleName}
 CRITICAL: For React Testing Library - Use import '@testing-library/jest-dom'; (DO NOT use '@testing-library/jest-dom/extend-expect')
 
-Generate ADDITIONAL test cases to cover the missing lines.
+Generate ADDITIONAL unit test functions to specifically cover missing lines ${missingLines}.
 
 Requirements:
-- Focus on lines: ${missingLines}
-- Add new test functions (don't duplicate existing ones)
+- Write new test functions to execute lines: ${missingLines}
 - Test edge cases, error paths, and boundary conditions
-- Mock external dependencies if needed
-- Return ONLY the COMPLETE test file with ALL tests (existing + new)
+- Return ONLY valid test code with ALL tests (existing + new)
 `;
 }
 // ── Chunked Generation ────────────────────────────────────────────────────────
@@ -150,7 +192,7 @@ async function generateTestsForChunks(sourceCode, language, framework, coverageT
         const chunk = chunks[i];
         console.log(`  📝 Part ${i + 1}/${chunks.length}: ${chunk.name} (lines ${chunk.startLine}-${chunk.endLine})`);
         const chunkPrompt = buildInitialPrompt(chunk.code, language, framework, coverageTarget, filename, moduleName);
-        const result = await (0, llm_service_1.callLLMWithFallback)(chunkPrompt, 2000);
+        const result = await (0, llm_service_1.callLLMWithFallback)(chunkPrompt, 3500);
         if (!result) {
             console.warn(`  ⚠ Part ${i + 1} failed — skipping`);
             allFailures.push(`Part ${i + 1} (${chunk.name}): all fallback models failed`);

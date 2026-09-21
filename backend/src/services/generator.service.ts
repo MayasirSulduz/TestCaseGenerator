@@ -269,8 +269,8 @@ async function generateTestsForChunks(
     // Pause between chunks — Gemini free tier has low RPM, Groq has low TPM.
     // 10s gap balances rate limit recovery with total generation time.
     if (i < chunks.length - 1) {
-      const waitSec = 4;
-      console.log(`  ⏳ Waiting ${waitSec}s before next part (rate limit cooldown)...`);
+      const waitSec = 1;
+      console.log(`  ⏳ Waiting ${waitSec}s before next part...`);
       await delay(waitSec * 1000);
     }
   }
@@ -415,7 +415,7 @@ export async function generateTestsWithCoverage(
 
         if (!testPassed) {
           console.log(`⚠️ Test execution failed. Triggering AI Auto-Repair Agent...`);
-          const fullErr = coverageResult.stderr || coverageResult.stdout || coverageResult.error || 'Test suite failed execution';
+          const fullErr = [coverageResult.stdout, coverageResult.stderr, coverageResult.error].filter(Boolean).join('\n');
           const errOutput = fullErr.length > 3000 ? fullErr.slice(-3000) : fullErr;
           nextPrompt = buildRepairPrompt(sourceCode, testCode, errOutput, language, framework, filename);
         } else {
@@ -441,8 +441,13 @@ export async function generateTestsWithCoverage(
             newCode = fixPythonImports(newCode, moduleName);
           }
 
-          // Always merge new/repaired test blocks into testCode to PRESERVE all previously passing tests!
-          testCode = mergeTestChunks([testCode, newCode], language);
+          if (!testPassed) {
+            // Repair pass: replace testCode with the repaired version so broken tests aren't duplicated
+            testCode = newCode;
+          } else {
+            // Coverage enhancement pass: merge new test blocks into existing test suite
+            testCode = mergeTestChunks([testCode, newCode], language);
+          }
         } else {
           console.warn('Failed to receive response from LLM during refinement pass');
           break;

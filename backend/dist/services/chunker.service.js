@@ -69,35 +69,105 @@ function mergeTestChunks(chunks, language) {
     ].join('\n\n');
 }
 /**
- * Python-specific merge: gather imports at the top and cleanly append test blocks,
- * preserving indentation and AST structure without creating SyntaxErrors.
+ * Python-specific merge: gather imports at the top, deduplicate function definitions,
+ * and filter out incomplete/truncated function stubs caused by LLM token limits.
  */
-function mergePythonTests(imports, bodies) {
-    const finalImports = new Set(imports);
-    const cleanBlocks = [];
-    for (const body of bodies) {
-        const lines = body.split('\n');
-        const nonImportLines = [];
-        for (const line of lines) {
+function mergePythonTests(initialImports, chunks) {
+    const finalImports = new Set(initialImports);
+    const functionMap = new Map(); // funcName -> fullCode
+    const otherStatements = [];
+    for (const chunk of chunks) {
+        const lines = chunk.split('\n');
+        let currentDecorators = [];
+        let currentFuncName = null;
+        let currentFuncLines = [];
+        const flushCurrentFunc = () => {
+            if (currentFuncName && currentFuncLines.length > 0) {
+                // Strip trailing incomplete token/statement lines (e.g. 'mock', 'user', 'assert', trailing dot/comma/equals)
+                let lastLine = currentFuncLines[currentFuncLines.length - 1].trim();
+                while (currentFuncLines.length > 1 &&
+                    (/^(mock|user|assert|with|if|elif|else|try|except|finally|return|raise|[a-z_]\w*)$/i.test(lastLine) ||
+                        /(\.|,|\|\||&&|\+|\-|\*|\/|\=|\(|\[|\{)$/.test(lastLine))) {
+                    currentFuncLines.pop();
+                    lastLine = currentFuncLines[currentFuncLines.length - 1].trim();
+                }
+                const fullFuncCode = [...currentDecorators, ...currentFuncLines].join('\n');
+                // Validate if function is complete (has at least 1 indented statement or valid body line)
+                const bodyLines = currentFuncLines.slice(1).filter(l => l.trim().length > 0 && !l.trim().startsWith('#'));
+                const hasBody = bodyLines.length > 0 && bodyLines.some(l => l.startsWith(' ') || l.startsWith('\t'));
+                const isTruncated = lastLine.endsWith('def') || lastLine.endsWith('(') || lastLine.endsWith('=') || lastLine.endsWith(',') || !hasBody;
+                if (!isTruncated) {
+                    const existing = functionMap.get(currentFuncName);
+                    // Keep the existing complete function or overwrite if new version is longer/more complete
+                    if (!existing || fullFuncCode.length >= existing.length) {
+                        functionMap.set(currentFuncName, fullFuncCode);
+                    }
+                }
+            }
+            currentDecorators = [];
+            currentFuncName = null;
+            currentFuncLines = [];
+        };
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const trimmed = line.trim();
             if (isImportLine(line, 'python')) {
-                finalImports.add(line.trim());
+                finalImports.add(trimmed);
+                continue;
+            }
+            if (trimmed.startsWith('@')) {
+                if (currentFuncName)
+                    flushCurrentFunc();
+                currentDecorators.push(line);
+                continue;
+            }
+            const defMatch = line.match(/^(\s*)(async\s+)?(def|class)\s+(\w+)/);
+            if (defMatch && defMatch[1].length === 0) { // Top-level def or class
+                if (currentFuncName)
+                    flushCurrentFunc();
+                currentFuncName = defMatch[4];
+                currentFuncLines.push(line);
+                continue;
+            }
+            if (currentFuncName) {
+                if (line.startsWith(' ') || line.startsWith('\t') || trimmed === '') {
+                    currentFuncLines.push(line);
+                }
+                else {
+                    flushCurrentFunc();
+                    if (trimmed.length > 0 && isAllowedTopLevelStatement(line)) {
+                        otherStatements.push(line);
+                    }
+                }
             }
             else {
-                nonImportLines.push(line);
+                if (trimmed.length > 0 && isAllowedTopLevelStatement(line)) {
+                    otherStatements.push(line);
+                }
             }
         }
-        const chunkContent = nonImportLines.join('\n').trim();
-        if (chunkContent) {
-            cleanBlocks.push(chunkContent);
-        }
+        flushCurrentFunc();
     }
     const sortedImports = Array.from(finalImports).sort();
+    const sortedFunctions = Array.from(functionMap.values());
     return [
         ...sortedImports,
         '',
         '',
-        cleanBlocks.join('\n\n')
+        ...(otherStatements.length ? [otherStatements.join('\n'), ''] : []),
+        sortedFunctions.join('\n\n')
     ].join('\n');
+}
+function isAllowedTopLevelStatement(line) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#'))
+        return true;
+    // Allow global variable assignments like APP_NAME = "..." or pytestmark = ...
+    if (/^[A-Z0-9_]+\s*=\s*/.test(trimmed) || /^pytestmark\s*=\s*/.test(trimmed)) {
+        return true;
+    }
+    // Reject orphan assert, with, if, for, while, try, or indented statements at top-level
+    return false;
 }
 function detectBoundaries(lines, language) {
     const boundaries = [];

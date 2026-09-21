@@ -79,7 +79,31 @@ export class JavaScriptRunner implements ITestRunner {
       };
       fs.writeFileSync(path.join(tempDir, 'package.json'), JSON.stringify(pkgJson, null, 2), 'utf-8');
 
+      let tsJestPath = 'ts-jest';
+      try {
+        tsJestPath = require.resolve('ts-jest', { paths: [backendNodeModules, backendDir] });
+      } catch {
+        tsJestPath = 'ts-jest';
+      }
+
+      const tsConfig = {
+        compilerOptions: {
+          target: 'es2020',
+          module: 'commonjs',
+          jsx: 'react-jsx',
+          allowJs: true,
+          strict: false,
+          esModuleInterop: true,
+          skipLibCheck: true,
+          types: ['jest', 'node', '@testing-library/jest-dom']
+        }
+      };
+      fs.writeFileSync(path.join(tempDir, 'tsconfig.json'), JSON.stringify(tsConfig, null, 2), 'utf-8');
+
       const jestConfig = {
+        transform: {
+          '^.+\\.(ts|tsx|js|jsx)$': [tsJestPath, { diagnostics: false, tsconfig: path.join(tempDir, 'tsconfig.json') }]
+        },
         testEnvironment: isJsx ? 'jsdom' : 'node',
         collectCoverage: true,
         moduleNameMapper: {

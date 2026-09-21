@@ -19,22 +19,13 @@ export interface ModelConfig {
  */
 export const MODEL_CHAIN: ModelConfig[] = [
   {
-    id: 'gemini-3.6-flash',
-    provider: 'gemini',
-    displayName: 'Gemini 3.6 Flash',
-    contextWindow: 1_048_576,
-    maxOutputTokens: 65_536,
-    maxRequestTokens: 8_000,
-    freeTierTPM: 1_000_000
-  },
-  {
     id: 'codestral-latest',
     provider: 'mistral',
     displayName: 'Codestral (Mistral AI)',
     contextWindow: 32_768,
     maxOutputTokens: 8_192,
     maxRequestTokens: 4_096,
-    freeTierTPM: 100_000
+    freeTierTPM: 500_000
   },
   {
     id: 'mistral-small-latest',
@@ -43,7 +34,16 @@ export const MODEL_CHAIN: ModelConfig[] = [
     contextWindow: 32_768,
     maxOutputTokens: 8_192,
     maxRequestTokens: 4_096,
-    freeTierTPM: 100_000
+    freeTierTPM: 500_000
+  },
+  {
+    id: 'gemini-3.6-flash',
+    provider: 'gemini',
+    displayName: 'Gemini 3.6 Flash',
+    contextWindow: 1_048_576,
+    maxOutputTokens: 65_536,
+    maxRequestTokens: 8_000,
+    freeTierTPM: 1_000_000
   },
   {
     id: 'openai/gpt-oss-120b',
