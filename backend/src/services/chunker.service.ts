@@ -151,15 +151,16 @@ function mergePythonTests(initialImports: string[], chunks: string[]): string {
 
       if (trimmed.startsWith('@')) {
         if (currentFuncName) flushCurrentFunc();
-        currentDecorators.push(line);
+        currentDecorators.push(trimmed);
         continue;
       }
 
       const defMatch = line.match(/^(\s*)(async\s+)?(def|class)\s+(\w+)/);
-      if (defMatch && defMatch[1].length === 0) { // Top-level def or class
+      if (defMatch && defMatch[1].length <= 3) { // Top-level or slightly mis-indented (1-3 spaces) def/class
         if (currentFuncName) flushCurrentFunc();
         currentFuncName = defMatch[4];
-        currentFuncLines.push(line);
+        currentDecorators = currentDecorators.map(d => d.trim());
+        currentFuncLines.push(trimmed); // Force column 0 alignment
         continue;
       }
 

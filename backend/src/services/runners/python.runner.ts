@@ -8,6 +8,21 @@ import { ITestRunner } from './base.runner';
 
 const execAsync = promisify(exec);
 
+function printErrorContext(code: string, lineNumber: number, radius = 8): string {
+  const lines = code.split('\n');
+  const start = Math.max(0, lineNumber - radius - 1);
+  const end = Math.min(lines.length, lineNumber + radius);
+
+  return lines
+    .slice(start, end)
+    .map((line, index) => {
+      const actualLine = start + index + 1;
+      const mark = actualLine === lineNumber ? '>>' : '  ';
+      return `${mark} ${String(actualLine).padStart(4)} | ${line}`;
+    })
+    .join('\n');
+}
+
 /**
  * conftest.py that auto-mocks any missing third-party imports so the source
  * module can always be imported in the sandbox — even if it uses flask,
@@ -175,13 +190,16 @@ for attempt in range(200):
         break
     except SyntaxError as e:
         modified = True
-        err_idx = (e.lineno - 1) if (e.lineno and e.lineno <= len(lines)) else (len(lines) - 1)
+        err_idx = (e.lineno - 1) if (e.lineno and 1 <= e.lineno <= len(lines)) else (len(lines) - 1)
 
         # Find starting line of enclosing top-level function/class/fixture block
         func_start = err_idx
         while func_start > 0:
             l_str = lines[func_start]
-            if l_str.strip() and (len(l_str) - len(l_str.lstrip()) == 0):
+            l_strip = l_str.strip()
+            if (len(l_str) - len(l_str.lstrip()) == 0) and (
+                l_strip.startswith(('def ', 'async def ', 'class ')) or l_strip.startswith('@')
+            ):
                 break
             func_start -= 1
 
@@ -189,20 +207,24 @@ for attempt in range(200):
         func_end = func_start + 1
         while func_end < len(lines):
             l_str = lines[func_end]
-            if l_str.strip() and (len(l_str) - len(l_str.lstrip()) == 0):
-                break
+            l_strip = l_str.strip()
+            if l_strip and not l_strip.startswith('#'):
+                if (len(l_str) - len(l_str.lstrip()) == 0) and (
+                    l_strip.startswith(('def ', 'async def ', 'class ')) or l_strip.startswith('@')
+                ):
+                    break
             func_end += 1
 
-        # Comment out the entire failing function block
+        changed_any = False
         for k in range(func_start, func_end):
             if lines[k].strip() and not lines[k].strip().startswith('#'):
                 lines[k] = comment_line(lines[k], "Failing Block")
+                changed_any = True
 
-# Phase 1.5: Guaranteed line-level salvage. Block-level commenting alone can give up
-# on files with many broken blocks (it caps out and would silently leave the file
-# unparseable). This loop is GUARANTEED to converge: every pass either succeeds or
-# comments out exactly one offending line, so it terminates for any finite file and
-# ends with code that ast.parse() accepts.
+        if not changed_any and 0 <= err_idx < len(lines):
+            lines[err_idx] = comment_line(lines[err_idx], "Line Salvage")
+
+# Phase 1.5: Guaranteed line-level salvage loop
 guard = 0
 while guard < 10000:
     try:
@@ -211,9 +233,6 @@ while guard < 10000:
     except SyntaxError as e:
         err_idx = (e.lineno - 1) if (e.lineno and 1 <= e.lineno <= len(lines)) else -1
         if not (0 <= err_idx < len(lines)):
-            break
-        target = lines[err_idx].strip()
-        if not target or target.startswith('#'):
             break
         modified = True
         lines[err_idx] = comment_line(lines[err_idx], "Sanitized")
@@ -274,21 +293,45 @@ if modified:
         console.log(`  [PythonRunner] AST sanitization warning: ${astErr?.message || astErr}`);
       }
 
+      // Fast-fail AST check: verify that test_${baseName}.py parses with 0 syntax errors before running Pytest
+      try {
+        await execAsync(`python3 -c "import ast; ast.parse(open('test_${baseName}.py', encoding='utf-8').read())"`, { cwd: tempDir, timeout: 10000 });
+      } catch (syntaxErr: any) {
+        const syntaxMsg = syntaxErr.stderr || syntaxErr.stdout || syntaxErr.message || 'SyntaxError during Python AST parse';
+        console.log(`  [PythonRunner] ❌ Fast-fail: Generated test code has AST syntax errors. Skipping Pytest execution.`);
+
+        const lineMatch = syntaxMsg.match(/line (\d+)/i);
+        if (lineMatch) {
+          const errLineNum = parseInt(lineMatch[1], 10);
+          console.log(`\n  ── AST Syntax Error Location (Line ${errLineNum}) ──`);
+          console.log(printErrorContext(testCode, errLineNum));
+          console.log(`  ── End Syntax Error Context ──\n`);
+        }
+
+        return {
+          success: false,
+          coverage: 0,
+          test_passed: false,
+          error: `AST SyntaxError: Generated test file is not valid Python. Traceback:\n${syntaxMsg}`,
+          stdout: syntaxMsg,
+          stderr: syntaxMsg
+        };
+      }
+
       // ── Pre-flight: check if the source module can be imported ──
       try {
         const importCheck = await execAsync(
           `python3 -c "import sys; sys.path.insert(0,'.'); import ${baseName}"`,
-          { cwd: tempDir, timeout: 15000 }
+          { cwd: tempDir, timeout: 15000, env: { ...process.env, PYTHONPATH: tempDir } }
         );
         console.log(`  [PythonRunner] Source module '${baseName}' imported OK`);
       } catch (importErr: any) {
         const importErrMsg = (importErr.stderr || importErr.stdout || '').slice(0, 300);
         console.log(`  [PythonRunner] Source module import warning: ${importErrMsg}`);
-        // Continue anyway — conftest.py should handle missing deps
       }
 
-      // ── Run pytest with coverage ──
-      const cmd = `python3 -m pytest test_${baseName}.py --cov=${baseName} --cov-report=term-missing -v --tb=short -W ignore::DeprecationWarning`;
+      // ── Run pytest with json & term coverage ──
+      const cmd = `python3 -m pytest test_${baseName}.py --cov=${baseName} --cov-report=json:coverage.json --cov-report=term-missing -v --tb=short -W ignore::DeprecationWarning`;
 
       let stdout = '';
       let stderr = '';
@@ -299,7 +342,7 @@ if modified:
           cwd: tempDir,
           timeout: 90000,             // 90s for large files
           maxBuffer: 10 * 1024 * 1024, // 10MB
-          env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }
+          env: { ...process.env, PYTHONPATH: tempDir, PYTHONDONTWRITEBYTECODE: '1' }
         });
         stdout = result.stdout;
         stderr = result.stderr;
@@ -314,16 +357,41 @@ if modified:
       console.log(`  [PythonRunner] stdout length: ${stdout.length}, stderr length: ${stderr.length}`);
       console.log(`  [PythonRunner] test_passed: ${testPassed}`);
 
-      // ── Parse coverage output ──
+      // ── Parse machine-readable coverage.json report if available ──
+      const jsonCovPath = path.join(tempDir, 'coverage.json');
+      let jsonCoverage = 0;
+      let jsonMissingLines = 'None';
+      let jsonReportFound = false;
+
+      if (fs.existsSync(jsonCovPath)) {
+        try {
+          const covJson = JSON.parse(fs.readFileSync(jsonCovPath, 'utf-8'));
+          const totalPct = covJson.totals?.percent_covered;
+          if (typeof totalPct === 'number') {
+            jsonCoverage = Math.round(totalPct);
+            jsonReportFound = true;
+          }
+          const filesMap = covJson.files || {};
+          const matchedFileKey = Object.keys(filesMap).find(f => f.endsWith(`${baseName}.py`) || f === `${baseName}.py`);
+          if (matchedFileKey && filesMap[matchedFileKey]?.missing_lines) {
+            const missingArr = filesMap[matchedFileKey].missing_lines;
+            if (Array.isArray(missingArr) && missingArr.length > 0) {
+              jsonMissingLines = missingArr.join(', ');
+            }
+          }
+        } catch {}
+      }
+
+      // ── Fallback term coverage parsing ──
       const covMatch =
         combinedOutput.match(
           new RegExp(`${baseName}\\.py\\s+\\d+\\s+\\d+\\s+(\\d+)%\\s*(.*)`)
         ) || combinedOutput.match(/TOTAL\s+\d+\s+\d+\s+(\d+)%/);
 
-      if (covMatch) {
-        const coverage = parseInt(covMatch[1], 10);
-        const missingLines = covMatch[2]?.trim() || 'None';
+      const coverage = jsonReportFound ? jsonCoverage : (covMatch ? parseInt(covMatch[1], 10) : 0);
+      const missingLines = jsonReportFound ? jsonMissingLines : (covMatch?.[2]?.trim() || 'None');
 
+      if (jsonReportFound || covMatch) {
         const lines = combinedOutput.split('\n');
         const tableLines: string[] = [];
         let capturing = false;
@@ -343,7 +411,7 @@ if modified:
         return {
           success: true,
           coverage,
-          missing_lines: missingLines.length ? missingLines : 'None',
+          missing_lines: missingLines,
           coverage_table: tableLines.length ? tableLines.join('\n') : combinedOutput.slice(0, 500),
           test_passed: testPassed,
           stdout,

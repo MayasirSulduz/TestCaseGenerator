@@ -77,15 +77,18 @@ ${sourceCode}
 \`\`\`
 
 CRITICAL REQUIREMENTS:
-1. For Python: The import statement MUST be: from ${moduleName} import *
-2. For Java: Match the class names exactly from the source code
-3. For JavaScript/TypeScript: Use proper module imports/exports (e.g. const { ... } = require('./${moduleName}'))
-4. Write tests that cover ALL functions, methods, classes, and branches
-5. Include edge cases, error handling, and boundary conditions
-6. Use descriptive test names following ${framework} conventions
-7. For React Testing Library: Use import '@testing-library/jest-dom'; (DO NOT use '@testing-library/jest-dom/extend-expect')
-8. Mock external dependencies and sub-components if needed (for Jest relative path mocks, include virtual option e.g. jest.mock('./path', () => ..., { virtual: true }))
-9. Return ONLY the test code, no markdown formatting, no explanations
+1. For Python:
+   - Output ONLY valid, parseable Python syntax.
+   - All \`def test_*():\` functions MUST be placed at the top level (column 0, zero indentation).
+   - Use 4 spaces for function/class body indentation, NEVER use tabs.
+   - The import statements MUST be: \`from ${moduleName} import *\` and \`import ${moduleName}\`.
+   - Minimal, non-duplicate imports placed cleanly at the top of the file.
+2. For Java: Match class names exactly from the source code.
+3. For JavaScript/TypeScript: Use proper module imports/exports.
+4. For React Testing Library: Use \`import '@testing-library/jest-dom';\` (DO NOT use '@testing-library/jest-dom/extend-expect').
+5. Write tests that cover ALL functions, methods, classes, and branches.
+6. Mock external dependencies if needed.
+7. Return ONLY the raw code content. Do NOT include markdown code block fences or explanations.
 
 IMPORTANT: The module/class name is "${moduleName}" - use this exact name in imports!
 
@@ -105,7 +108,7 @@ function buildRepairPrompt(
   const safeErr = (errOutput || '').length > 3000 ? (errOutput || '').slice(-3000) : (errOutput || '');
   const safeSource = truncateCodeForPrompt(sourceCode, 350);
 
-  return `The generated ${framework} test suite for ${language} failed during local execution.
+  return `You are an expert AI Auto-Repair Agent. The generated ${framework} test suite for ${language} failed during local execution / AST parsing.
 
 Module name: ${moduleName}
 Filename: ${filename}
@@ -115,7 +118,7 @@ Source Code (Reference Implementation):
 ${safeSource}
 \`\`\`
 
-Test Execution Error Output:
+Test Execution / AST Error Output:
 \`\`\`
 ${safeErr}
 \`\`\`
@@ -125,12 +128,16 @@ Current Failing Test Code:
 ${testCode}
 \`\`\`
 
-CRITICAL INSTRUCTIONS:
-1. Compare the assertions in failing tests against the actual Source Code implementation above.
-2. FIX all assertion errors, return value mismatches, wrong function signatures, and wrong arguments.
-3. For Python: Ensure imports include: from ${moduleName} import * and import ${moduleName}
-4. Look at the error output carefully — fix the EXACT issue described in each failed test.
-5. Return ONLY the complete corrected test file with ALL tests. No markdown formatting, no explanations.
+CRITICAL REPAIR INSTRUCTIONS:
+1. Fix all SyntaxError, IndentationError, unexpected unindent, and AST parsing errors.
+2. For Python:
+   - Ensure all \`def test_*():\` functions are at the top level (column 0, zero indentation).
+   - Use 4 spaces for body indentation, NEVER tabs.
+   - Ensure imports include: \`from ${moduleName} import *\` and \`import ${moduleName}\`.
+   - Keep imports minimal and non-duplicated at the top of the file.
+3. Fix all assertion errors and argument mismatches by looking at the Source Code implementation.
+4. If a test function cannot be fixed, remove or comment it out rather than outputting invalid syntax.
+5. Return ONLY the complete corrected test file with ALL tests. Do NOT include markdown code block fences or explanations.
 `;
 }
 
@@ -221,6 +228,103 @@ Requirements:
 `;
 }
 
+import { execSync } from 'child_process';
+
+function validatePython(code: string): { valid: boolean; error?: string } {
+  try {
+    execSync('python3 -c "import ast,sys; ast.parse(sys.stdin.read())"', {
+      input: code,
+      encoding: 'utf8',
+      timeout: 5000
+    });
+    return { valid: true };
+  } catch (err: any) {
+    const errorMsg = err.stderr || err.stdout || err.message || 'SyntaxError during Python AST parse';
+    return { valid: false, error: errorMsg };
+  }
+}
+
+function cleanModelOutput(raw: string): string {
+  let text = (raw || '')
+    .replace(/```python/gi, '')
+    .replace(/```/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\t/g, '    ')
+    .trim();
+
+  const lines = text.split('\n');
+  const filtered = lines.filter((line) => {
+    const trimmed = line.trim();
+    if (/^(import |from.+ import )/.test(trimmed)) return false;
+    if (/^(Here('|')s|Explanation:|Test cases:|Notes?:|Summary:)/i.test(trimmed)) return false;
+    if (trimmed.startsWith('```')) return false;
+    return true;
+  });
+
+  let cleaned = filtered.join('\n').trim();
+
+  // Strip invalid placeholder test_func
+  if (/\bdef\s+test_func\s*\(/.test(cleaned) || /\btest_func\.\w+/.test(cleaned)) {
+    cleaned = cleaned.replace(/def\s+test_func\s*\([^)]*\)[\s\S]*?(?=\ndef|\nclass|$)/g, '').trim();
+  }
+
+  return cleaned;
+}
+
+function buildChunkPrompt(
+  chunkCode: string,
+  moduleName: string
+): string {
+  return `You generate pytest unit tests for the provided Python source-code chunk.
+
+Return ONLY Python test function definitions.
+
+Hard rules:
+1. Output zero or more complete top-level functions named test_*.
+2. Every "def test_*" MUST begin at column 0.
+3. Use exactly 4 spaces for nested code; never use tabs.
+4. Do NOT generate imports.
+5. Do NOT generate classes, decorators, markdown fences, prose, headings, comments, or explanations.
+6. Do NOT use placeholder functions such as test_func.
+7. Every test function must be independently complete and must end before another test begins.
+8. Do not repeat tests from prior chunks.
+9. If a valid test cannot be written for this chunk, return an empty response.
+
+SOURCE MODULE NAME: ${moduleName}
+SOURCE CHUNK:
+\`\`\`python
+${chunkCode}
+\`\`\`
+`;
+}
+
+function buildChunkRepairPrompt(
+  brokenFragment: string,
+  syntaxError: string,
+  moduleName: string
+): string {
+  return `Repair the Python pytest test code below.
+
+Output ONLY corrected Python code. Do not use markdown fences or explanations.
+
+Rules:
+- Return only complete top-level def test_*(): functions.
+- Do not include imports.
+- Each def test_* must start at column 0.
+- Use four spaces for every nested block; no tabs.
+- Do not create test_func placeholders.
+- Preserve only tests that can be made syntactically valid.
+- If a test is unclear, remove it rather than writing invalid Python.
+
+SOURCE MODULE NAME: ${moduleName}
+PYTHON SYNTAX ERROR:
+${syntaxError}
+
+BROKEN TEST FRAGMENT:
+${brokenFragment}
+`;
+}
+
 // ── Chunked Generation ────────────────────────────────────────────────────────
 
 async function generateTestsForChunks(
@@ -238,40 +342,70 @@ async function generateTestsForChunks(
   let lastLLMResult: LLMCallResult | null = null;
   const allFailures: string[] = [];
 
+  const HEADER = `import pytest
+from unittest.mock import MagicMock, patch, mock_open
+import ${moduleName}
+from ${moduleName} import *
+
+`;
+
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     console.log(`  📝 Part ${i + 1}/${chunks.length}: ${chunk.name} (lines ${chunk.startLine}-${chunk.endLine})`);
 
-    const chunkPrompt = buildInitialPrompt(
-      chunk.code,
-      language,
-      framework,
-      coverageTarget,
-      filename,
-      moduleName
-    );
+    const chunkPrompt = (language === 'Python')
+      ? buildChunkPrompt(chunk.code, moduleName)
+      : buildInitialPrompt(chunk.code, language, framework, coverageTarget, filename, moduleName);
 
     const result = await callLLMWithFallback(chunkPrompt, 3500);
-    if (!result) {
+    if (!result || !result.content) {
       console.warn(`  ⚠ Part ${i + 1} failed — skipping`);
       allFailures.push(`Part ${i + 1} (${chunk.name}): all fallback models failed`);
       continue;
     }
 
     lastLLMResult = result;
-    let code = sanitizeTestImports(extractCodeFromMarkdown(result.content));
-    if (language === 'Python') {
-      code = fixPythonImports(code, moduleName);
-    }
-    chunkResults.push(code);
-    console.log(`  ✓ Part ${i + 1}/${chunks.length} testcases generated and appended successfully!`);
 
-    // Pause between chunks — Gemini free tier has low RPM, Groq has low TPM.
-    // 10s gap balances rate limit recovery with total generation time.
+    if (language === 'Python') {
+      let cleanedChunk = cleanModelOutput(result.content);
+      if (!cleanedChunk) continue;
+
+      let candidate = `${HEADER}${cleanedChunk}\n`;
+      let validation = validatePython(candidate);
+
+      if (!validation.valid) {
+        console.warn(`  ⚠ Part ${i + 1} AST validation rejected: ${validation.error?.slice(0, 150)}`);
+        console.log(`  🔧 Triggering small per-chunk repair agent for Part ${i + 1}...`);
+
+        const repairPrompt = buildChunkRepairPrompt(cleanedChunk, validation.error || 'SyntaxError', moduleName);
+        const repairedResult = await callLLMWithFallback(repairPrompt, 3000);
+
+        if (repairedResult && repairedResult.content) {
+          const repairedChunk = cleanModelOutput(repairedResult.content);
+          const repairedCandidate = `${HEADER}${repairedChunk}\n`;
+          const repairedValidation = validatePython(repairedCandidate);
+
+          if (repairedValidation.valid) {
+            console.log(`  ✓ Part ${i + 1}/${chunks.length} repaired & validated successfully!`);
+            chunkResults.push(repairedChunk);
+          } else {
+            console.warn(`  ❌ Part ${i + 1} skipped after per-chunk repair failure.`);
+          }
+        } else {
+          console.warn(`  ❌ Part ${i + 1} skipped — repair prompt returned empty.`);
+        }
+      } else {
+        console.log(`  ✓ Part ${i + 1}/${chunks.length} testcases generated & validated successfully!`);
+        chunkResults.push(cleanedChunk);
+      }
+    } else {
+      let code = sanitizeTestImports(extractCodeFromMarkdown(result.content));
+      chunkResults.push(code);
+      console.log(`  ✓ Part ${i + 1}/${chunks.length} testcases generated and appended successfully!`);
+    }
+
     if (i < chunks.length - 1) {
-      const waitSec = 1;
-      console.log(`  ⏳ Waiting ${waitSec}s before next part...`);
-      await delay(waitSec * 1000);
+      await delay(1000);
     }
   }
 
@@ -279,11 +413,14 @@ async function generateTestsForChunks(
     return null;
   }
 
-  let mergedCode = mergeTestChunks(chunkResults, language);
+  let mergedCode = (language === 'Python')
+    ? `${HEADER}${chunkResults.join('\n\n')}\n`
+    : mergeTestChunks(chunkResults, language);
+
   if (language === 'Python') {
     mergedCode = fixPythonImports(mergedCode, moduleName);
   }
-  console.log(`  ✅ All ${chunks.length} parts generated and merged into complete test suite!`);
+  console.log(`  ✅ All ${chunks.length} parts generated, validated, and merged into complete test suite!`);
   return { testCode: mergedCode, llmResult: lastLLMResult, allFailures };
 }
 
@@ -414,12 +551,18 @@ export async function generateTestsWithCoverage(
         let nextPrompt = '';
 
         if (!testPassed) {
-          console.log(`⚠️ Test execution failed. Triggering AI Auto-Repair Agent...`);
+          const isSyntaxErr = (coverageResult.error || '').includes('AST SyntaxError');
+          if (isSyntaxErr) {
+            console.log(`⚠️ AST Syntax Error detected. Triggering Syntax Repair Attempt ${iteration}/${maxIterations}...`);
+          } else {
+            console.log(`⚠️ Test execution failed. Triggering Test Execution Iteration ${iteration}/${maxIterations}...`);
+          }
+
           const fullErr = [coverageResult.stdout, coverageResult.stderr, coverageResult.error].filter(Boolean).join('\n');
           const errOutput = fullErr.length > 3000 ? fullErr.slice(-3000) : fullErr;
           nextPrompt = buildRepairPrompt(sourceCode, testCode, errOutput, language, framework, filename);
         } else {
-          console.log(`Coverage ${currentCoverage}% < ${coverageTarget}%. Triggering Coverage Enhancement Agent...`);
+          console.log(`Coverage ${currentCoverage}% < ${coverageTarget}%. Triggering Coverage Expansion Iteration ${iteration}/${maxIterations}...`);
           const missingLines = coverageResult.missing_lines || 'All lines';
           nextPrompt = buildEnhancementPrompt(
             sourceCode, testCode, currentCoverage, coverageTarget, missingLines, language, moduleName

@@ -30,7 +30,7 @@ export function extractCodeFromMarkdown(text: string): string {
     // Filter out conversational text lines starting with bullet points (-), questions (Wait, if...), or Markdown headers (# )
     if (
       /^\s*-\s+/.test(line) ||
-      /^(Wait|Here|Note|In this|This test|For `|To test|\*|\#\#\#|\#\#|\#)/i.test(trimmed)
+      /^(Wait|Here|Note|In this|This test|For `|To test|\*|^#{1,6}\s+)/i.test(trimmed)
     ) {
       codeLines.push(`# [Prose Filtered] ${trimmed}`);
     } else {
@@ -51,6 +51,9 @@ export function sanitizeTestImports(testCode: string): string {
 export function fixPythonImports(testCode: string, correctModuleName: string): string {
   let formatted = testCode;
 
+  // 0. Convert tabs to 4 spaces
+  formatted = formatted.replace(/\t/g, '    ');
+
   // 1. Fix function definitions with spaces in name (e.g. `def test_foo bar(` -> `def test_foo_bar(`)
   formatted = formatted.replace(/^(\s*def\s+test_[\w\s]+?)\s+(\w+)\s*\(/gm, (_match, prefix, rest) => {
     return prefix.replace(/\s+/g, '_') + '_' + rest + '(';
@@ -68,7 +71,7 @@ export function fixPythonImports(testCode: string, correctModuleName: string): s
     formatted = formatted.replace(pattern, `from ${correctModuleName} import`);
   }
 
-  // Strip top-level indentation for function definitions outside of classes
+  // Strip top-level indentation for function definitions & decorators outside of classes
   const lineList = formatted.split('\n');
   let inClass = false;
   let classIndent = 0;
@@ -89,8 +92,10 @@ export function fixPythonImports(testCode: string, correctModuleName: string): s
       }
     }
 
-    if (!inClass && /^\s+(async\s+)?def\s+/.test(line)) {
-      lineList[i] = trimmed;
+    if (!inClass) {
+      if (/^\s+(async\s+)?def\s+test_/.test(line) || /^\s+@pytest\./.test(line)) {
+        lineList[i] = trimmed;
+      }
     }
   }
   formatted = lineList.join('\n');
@@ -100,15 +105,24 @@ export function fixPythonImports(testCode: string, correctModuleName: string): s
   const hasImportModule = new RegExp(`import\\s+${correctModuleName}\\b`, 'i').test(formatted);
 
   const importSet = new Set<string>();
+  const mockSymbols = new Set<string>();
   const bodyLines: string[] = [];
 
   for (const line of formatted.split('\n')) {
     const trimmed = line.trim();
-    if (/^(import |from \w)/.test(trimmed)) {
+    if (/^from\s+unittest\.mock\s+import\s+/.test(trimmed)) {
+      const symbols = trimmed.replace(/^from\s+unittest\.mock\s+import\s+/, '').split(',');
+      symbols.forEach(s => mockSymbols.add(s.trim()));
+    } else if (/^(import |from \w)/.test(trimmed)) {
       importSet.add(trimmed);
     } else {
       bodyLines.push(line);
     }
+  }
+
+  if (mockSymbols.size > 0) {
+    const sortedMocks = Array.from(mockSymbols).sort().join(', ');
+    importSet.add(`from unittest.mock import ${sortedMocks}`);
   }
 
   if (!hasImportModule) {
