@@ -15,6 +15,10 @@ export interface CoverageResult {
   error?: string;
   stdout?: string;
   stderr?: string;
+  failedTests?: string[];
+  failedCount?: number;
+  passedTests?: number;
+  collectionError?: boolean;
 }
 
 export interface CoverageReportDTO {

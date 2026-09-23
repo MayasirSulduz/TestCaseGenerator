@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import { envConfig } from '../config/env.config';
 import {
   CoverageReportDTO,
@@ -228,20 +229,153 @@ Requirements:
 `;
 }
 
-import { execSync } from 'child_process';
-
-function validatePython(code: string): { valid: boolean; error?: string } {
+function astValidate(code: string): { ok: boolean; error?: string } {
   try {
-    execSync('python3 -c "import ast,sys; ast.parse(sys.stdin.read())"', {
+    execSync('python3 -c "import ast, sys; ast.parse(sys.stdin.read())"', {
       input: code,
       encoding: 'utf8',
       timeout: 5000
     });
-    return { valid: true };
+    return { ok: true };
   } catch (err: any) {
-    const errorMsg = err.stderr || err.stdout || err.message || 'SyntaxError during Python AST parse';
-    return { valid: false, error: errorMsg };
+    return {
+      ok: false,
+      error: err.stderr || err.stdout || err.message || 'Python AST validation failed.'
+    };
   }
+}
+
+function normalizeModelCode(text: string): string {
+  return (text || '')
+    .replace(/^```(?:python)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+}
+
+function looksTruncated(code: string): boolean {
+  const trimmed = (code || '').trimEnd();
+  return (
+    trimmed.length === 0 ||
+    /(?:["']|\(|\[|\{|\\)$/.test(trimmed) ||
+    /\bdef\s+\w+\([^)]*$/.test(trimmed)
+  );
+}
+
+function validateRepairFunction(
+  candidateFunction: string,
+  expectedName: string
+): { ok: boolean; error?: string } {
+  const containsDef = candidateFunction.includes(`def ${expectedName}(`);
+  if (!containsDef) {
+    return {
+      ok: false,
+      error: `Repair must contain def ${expectedName}(`
+    };
+  }
+
+  if (looksTruncated(candidateFunction)) {
+    return {
+      ok: false,
+      error: 'Repair output appears truncated.'
+    };
+  }
+
+  return astValidate(candidateFunction);
+}
+
+function testNameFromNodeId(nodeId: string): string {
+  const match = nodeId.match(/::([A-Za-z_]\w*)$/);
+  if (!match) {
+    throw new Error(`Invalid pytest node ID: ${nodeId}`);
+  }
+  return match[1];
+}
+
+function extractTestFunction(source: string, functionName: string): string {
+  const pattern = new RegExp(
+    `^(?:@[^\\n]+\\n)*def\\s+${functionName}\\s*\\([^\\n]*\\):[\\s\\S]*?(?=^(?:@[^\\n]+\\n)*def\\s+|\\Z)`,
+    'm'
+  );
+  const match = source.match(pattern);
+  if (!match) {
+    throw new Error(`Could not find test function: ${functionName}`);
+  }
+  return match[0].trimEnd();
+}
+
+function replaceTestFunction(
+  suiteSource: string,
+  functionName: string,
+  replacement: string
+): string {
+  const pattern = new RegExp(
+    `^(?:@[^\\n]+\\n)*def\\s+${functionName}\\s*\\([^\\n]*\\):[\\s\\S]*?(?=^(?:@[^\\n]+\\n)*def\\s+|\\Z)`,
+    'm'
+  );
+  if (!pattern.test(suiteSource)) {
+    throw new Error(`Cannot replace missing function: ${functionName}`);
+  }
+  return suiteSource.replace(pattern, `${replacement.trimEnd()}\n\n`);
+}
+
+function buildSingleTestRepairPrompt(input: {
+  testName: string;
+  failureOutput: string;
+  currentTest: string;
+  relevantAppSource: string;
+}): string {
+  return `
+You are repairing exactly one failing pytest test.
+
+Return ONLY one complete top-level Python function named exactly:
+${input.testName}
+
+Hard rules:
+- Start exactly with: def ${input.testName}( (or @pytest.mark.asyncio\\nasync def ${input.testName}( if async)
+- Return no imports.
+- Return no markdown fences.
+- Return no prose, explanation, comments, classes, fixtures, or other tests.
+- Do not modify application code.
+- Do not modify any test except ${input.testName}.
+- Use the actual behavior shown by the source code, not assumed behavior.
+- All strings, brackets, parentheses, and calls must be complete and closed.
+- If behavior cannot be verified from the provided source, use:
+  pytest.skip("insufficient verified behavior")
+- The result must parse with Python ast.parse.
+
+PYTEST FAILURE:
+${input.failureOutput}
+
+CURRENT FAILING TEST:
+${input.currentTest}
+
+RELEVANT app.py SOURCE:
+${input.relevantAppSource}
+`.trim();
+}
+
+function candidateImproved(
+  baseline: CoverageResult,
+  candidate: CoverageResult,
+  repairedNodeId: string
+): boolean {
+  const candidateFailedTests = candidate.failedTests || [];
+  const targetStillFails = candidateFailedTests.includes(repairedNodeId);
+  const candidateFailedCount = candidate.failedCount ?? (candidate.test_passed ? 0 : 999);
+  const baselineFailedCount = baseline.failedCount ?? (baseline.test_passed ? 0 : 999);
+  const introducedFailures = candidateFailedCount > baselineFailedCount;
+
+  return (
+    !candidate.collectionError &&
+    !targetStillFails &&
+    !introducedFailures &&
+    (candidateFailedCount < baselineFailedCount || Boolean(candidate.test_passed))
+  );
+}
+
+function validatePython(code: string): { valid: boolean; error?: string } {
+  const result = astValidate(code);
+  return { valid: result.ok, error: result.error };
 }
 
 function cleanModelOutput(raw: string): string {
@@ -506,12 +640,16 @@ export async function generateTestsWithCoverage(
     }
   }
 
-  // ── Step 2: Iterative coverage loop ─────────────────────────────────────
+  // ── Step 2: Transactional Candidate-Based Iterative Loop ─────────────────
 
   const runner = getRunnerForLanguage(language);
   let coverageResult: CoverageResult | null = null;
   let iteration = 1;
   const maxIterations = envConfig.maxIterations;
+
+  let lastKnownGoodTestCode = testCode;
+  let lastExecutableCoverage = 0;
+  let lastPassingCoverage = 0;
 
   if (runner) {
     while (iteration <= maxIterations) {
@@ -519,81 +657,191 @@ export async function generateTestsWithCoverage(
       console.log(`Iteration ${iteration}/${maxIterations}: Running local test sandbox & coverage analysis...`);
       console.log(`------------------------------------------------------------`);
 
-      coverageResult = await runner.runCoverage(sourceCode, testCode, filename, framework);
+      coverageResult = await runner.runCoverage(sourceCode, lastKnownGoodTestCode, filename, framework);
 
       const currentCoverage = coverageResult.coverage || 0;
       const testPassed = Boolean(coverageResult.test_passed);
-      console.log(`Current Coverage: ${currentCoverage}% | Tests Passed: ${testPassed}`);
 
-      // ── Diagnostic: Log pytest output when tests fail ──
-      if (!testPassed) {
-        const fullErr = (coverageResult.stderr || coverageResult.stdout || coverageResult.error || '');
-        // Extract the tail (last 2500 chars) where pytest prints exception tracebacks & syntax error line numbers
-        const errTail = fullErr.length > 2500 ? '... [truncated top] ...\n' + fullErr.slice(-2500) : fullErr;
-        console.log(`\n  ── Pytest Error Output ──`);
-        console.log(errTail);
-        console.log(`  ── End Pytest Error ──`);
-
-        // Log first 15 lines of generated test code for diagnosis
-        const testLines = testCode.split('\n').slice(0, 15).join('\n');
-        console.log(`\n  ── Generated Test Code (first 15 lines) ──`);
-        console.log(testLines);
-        console.log(`  ── End Test Code Snippet ──\n`);
+      if (currentCoverage > 0) {
+        lastExecutableCoverage = Math.max(lastExecutableCoverage, currentCoverage);
+      }
+      if (testPassed) {
+        lastPassingCoverage = Math.max(lastPassingCoverage, currentCoverage);
       }
 
-      // Stop loop if target coverage achieved and all tests passed cleanly
+      console.log(`Current Coverage: ${currentCoverage}% | Max Executable Coverage: ${lastExecutableCoverage}% | Tests Passed: ${testPassed}`);
+
+      if (!testPassed) {
+        const fullErr = (coverageResult.stderr || coverageResult.stdout || coverageResult.error || '');
+        const errTail = fullErr.length > 2500 ? '... [truncated top] ...\n' + fullErr.slice(-2500) : fullErr;
+        console.log(`\n  ── Pytest Output Summary ──`);
+        console.log(errTail);
+        console.log(`  ── End Output Summary ──\n`);
+      }
+
       if (testPassed && currentCoverage >= coverageTarget) {
-        console.log(`✓ Target coverage ${coverageTarget}% achieved and tests passed!`);
+        console.log(`✓ Target coverage ${coverageTarget}% achieved and all tests passed!`);
         break;
       }
 
       if (iteration < maxIterations) {
-        let nextPrompt = '';
-
         if (!testPassed) {
           const isSyntaxErr = (coverageResult.error || '').includes('AST SyntaxError');
           if (isSyntaxErr) {
-            console.log(`⚠️ AST Syntax Error detected. Triggering Syntax Repair Attempt ${iteration}/${maxIterations}...`);
+            console.log(`⚠️ Syntax Error detected. Triggering Syntax Repair Attempt ${iteration}/${maxIterations}...`);
           } else {
-            console.log(`⚠️ Test execution failed. Triggering Test Execution Iteration ${iteration}/${maxIterations}...`);
+            console.log(`⚠️ Test assertions failed. Triggering Test Execution Iteration ${iteration}/${maxIterations}...`);
           }
 
           const fullErr = [coverageResult.stdout, coverageResult.stderr, coverageResult.error].filter(Boolean).join('\n');
-          const errOutput = fullErr.length > 3000 ? fullErr.slice(-3000) : fullErr;
-          nextPrompt = buildRepairPrompt(sourceCode, testCode, errOutput, language, framework, filename);
+          
+          if (language === 'Python' && !isSyntaxErr) {
+            // Targeted node-ID based single-function repair loop
+            const failedNodeIds = (coverageResult.failedTests && coverageResult.failedTests.length > 0)
+              ? coverageResult.failedTests
+              : [...fullErr.matchAll(/^FAILED\s+(.+?)(?:\s+-\s+.*)?$/gm)].map(m => m[1].trim()).filter(Boolean);
+
+            if (failedNodeIds.length > 0) {
+              console.log(`  🎯 Targeted repair for failed pytest node IDs: ${failedNodeIds.join(', ')}`);
+              let currentBaseline = coverageResult;
+
+              for (const nodeId of failedNodeIds) {
+                let testName: string;
+                try {
+                  testName = testNameFromNodeId(nodeId);
+                } catch {
+                  continue;
+                }
+
+                let currentFuncCode = '';
+                try {
+                  currentFuncCode = extractTestFunction(lastKnownGoodTestCode, testName);
+                } catch (err: any) {
+                  console.warn(`  ⚠️ Could not extract function ${testName}: ${err.message}`);
+                  continue;
+                }
+
+                const failureLine = (currentBaseline.stdout || currentBaseline.stderr || '')
+                  .split('\n')
+                  .find(line => line.includes(nodeId) || line.startsWith(`FAILED ${nodeId}`)) || `Failure for ${nodeId}`;
+
+                const prompt = buildSingleTestRepairPrompt({
+                  testName,
+                  failureOutput: failureLine,
+                  currentTest: currentFuncCode,
+                  relevantAppSource: extractMissingLinesContext(sourceCode, 'All lines')
+                });
+
+                await delay(2000);
+                const rawRes = await callLLMWithFallback(prompt, 2500);
+                if (!rawRes || !rawRes.content) {
+                  console.warn(`  ❌ Repair attempt for ${testName} returned empty response.`);
+                  continue;
+                }
+
+                const repairedFunc = normalizeModelCode(rawRes.content);
+                const funcValidation = validateRepairFunction(repairedFunc, testName);
+
+                if (!funcValidation.ok) {
+                  console.warn(`  ❌ Rejected ${testName}: ${funcValidation.error}`);
+                  continue;
+                }
+
+                let candidateSuite: string;
+                try {
+                  candidateSuite = replaceTestFunction(lastKnownGoodTestCode, testName, repairedFunc);
+                } catch (err: any) {
+                  console.warn(`  ❌ Rejected ${testName}: replace failed (${err.message})`);
+                  continue;
+                }
+
+                const suiteSyntax = astValidate(candidateSuite);
+                if (!suiteSyntax.ok) {
+                  console.warn(`  ❌ Rejected ${testName}: merged candidate suite failed AST parse (${suiteSyntax.error?.slice(0, 100)}).`);
+                  continue;
+                }
+
+                // Run candidate in sandbox
+                const candidateRun = await runner.runCoverage(sourceCode, candidateSuite, filename, framework);
+
+                if (!candidateImproved(currentBaseline, candidateRun, nodeId)) {
+                  console.warn(`  ❌ Rejected candidate for ${testName}: no verified improvement (baseline failed: ${currentBaseline.failedCount ?? 0}, candidate failed: ${candidateRun.failedCount ?? 0}).`);
+                  continue;
+                }
+
+                console.log(`  ✓ Promoted repair for ${testName}! Remaining failures: ${candidateRun.failedCount ?? 0}`);
+                lastKnownGoodTestCode = candidateSuite;
+                currentBaseline = candidateRun;
+
+                if (candidateRun.coverage > 0) {
+                  lastExecutableCoverage = Math.max(lastExecutableCoverage, candidateRun.coverage);
+                }
+                if (candidateRun.test_passed) {
+                  lastPassingCoverage = Math.max(lastPassingCoverage, candidateRun.coverage);
+                  break;
+                }
+              }
+            } else {
+              // Full file repair fallback with candidate validation gate & candidateImproved check
+              await delay(3000);
+              const nextPrompt = buildRepairPrompt(sourceCode, lastKnownGoodTestCode, fullErr.slice(-3000), language, framework, filename);
+              const improvedResult = await callLLMWithFallback(nextPrompt, 3000);
+              if (improvedResult && improvedResult.content) {
+                let candidateCode = sanitizeTestImports(extractCodeFromMarkdown(improvedResult.content));
+                candidateCode = fixPythonImports(candidateCode, moduleName);
+
+                const suiteSyntax = astValidate(candidateCode);
+                if (looksTruncated(candidateCode)) {
+                  console.warn(`  ❌ Repair candidate rejected: model output appears truncated.`);
+                } else if (!suiteSyntax.ok) {
+                  console.warn(`  ❌ Repair candidate rejected: AST validation failed (${suiteSyntax.error?.slice(0, 100)}).`);
+                } else {
+                  const candidateRun = await runner.runCoverage(sourceCode, candidateCode, filename, framework);
+                  if (!candidateRun.collectionError && candidateRun.coverage >= lastExecutableCoverage) {
+                    console.log(`  ✓ Full-suite repair candidate promoted.`);
+                    lastKnownGoodTestCode = candidateCode;
+                  } else {
+                    console.warn(`  ❌ Full-suite repair candidate rejected: did not improve run.`);
+                  }
+                }
+              }
+            }
+          } else {
+            // General repair pass
+            await delay(3000);
+            const nextPrompt = buildRepairPrompt(sourceCode, lastKnownGoodTestCode, fullErr.slice(-3000), language, framework, filename);
+            const improvedResult = await callLLMWithFallback(nextPrompt, 3000);
+            if (improvedResult && improvedResult.content) {
+              let candidateCode = sanitizeTestImports(extractCodeFromMarkdown(improvedResult.content));
+              if (language === 'Python') candidateCode = fixPythonImports(candidateCode, moduleName);
+
+              if (language === 'Python' && !astValidate(candidateCode).ok) {
+                console.warn(`  ❌ Repair candidate rejected: AST validation failed.`);
+              } else {
+                lastKnownGoodTestCode = candidateCode;
+              }
+            }
+          }
         } else {
           console.log(`Coverage ${currentCoverage}% < ${coverageTarget}%. Triggering Coverage Expansion Iteration ${iteration}/${maxIterations}...`);
           const missingLines = coverageResult.missing_lines || 'All lines';
-          nextPrompt = buildEnhancementPrompt(
-            sourceCode, testCode, currentCoverage, coverageTarget, missingLines, language, moduleName
+          const nextPrompt = buildEnhancementPrompt(
+            sourceCode, lastKnownGoodTestCode, currentCoverage, coverageTarget, missingLines, language, moduleName
           );
-        }
 
-        // Brief cooldown before hitting LLM again for refinement pass
-        await delay(4000);
-        const improvedResult = await callLLMWithFallback(nextPrompt, 3000);
-        if (improvedResult) {
-          if (improvedResult.fallbackUsed && !fallbackUsed) {
-            fallbackUsed = true;
-            fallbackReason = improvedResult.fallbackReason;
-          }
-          modelUsed = improvedResult.modelUsed;
+          await delay(3000);
+          const improvedResult = await callLLMWithFallback(nextPrompt, 3000);
+          if (improvedResult && improvedResult.content) {
+            let newCode = sanitizeTestImports(extractCodeFromMarkdown(improvedResult.content));
+            if (language === 'Python') newCode = fixPythonImports(newCode, moduleName);
 
-          let newCode = sanitizeTestImports(extractCodeFromMarkdown(improvedResult.content));
-          if (language === 'Python') {
-            newCode = fixPythonImports(newCode, moduleName);
+            const candidateCode = mergeTestChunks([lastKnownGoodTestCode, newCode], language);
+            if (language === 'Python' && !validatePython(candidateCode).valid) {
+              console.warn(`  ❌ Expansion candidate rejected: AST validation failed.`);
+            } else {
+              lastKnownGoodTestCode = candidateCode;
+            }
           }
-
-          if (!testPassed) {
-            // Repair pass: replace testCode with the repaired version so broken tests aren't duplicated
-            testCode = newCode;
-          } else {
-            // Coverage enhancement pass: merge new test blocks into existing test suite
-            testCode = mergeTestChunks([testCode, newCode], language);
-          }
-        } else {
-          console.warn('Failed to receive response from LLM during refinement pass');
-          break;
         }
       }
 
@@ -618,7 +866,7 @@ export async function generateTestsWithCoverage(
     runCommand = 'mvn clean test';
   }
 
-  const finalCoverage = coverageResult ? (coverageResult.coverage || 0) : 0;
+  const finalCoverage = Math.max(lastExecutableCoverage, lastPassingCoverage, coverageResult?.coverage || 0);
   const missingLines = coverageResult ? (coverageResult.missing_lines || 'None') : 'All lines';
   const summaryTable = coverageResult
     ? (coverageResult.coverage_table || coverageResult.error || coverageResult.stderr || 'No execution table available')
@@ -637,11 +885,10 @@ export async function generateTestsWithCoverage(
 
   return {
     status: 'success',
-    tests: testCode.trim(),
+    tests: lastKnownGoodTestCode.trim(),
     coverageReport,
     modelUsed,
     fallbackUsed,
-    fallbackReason,
-    executionTimeSec
+    fallbackReason
   };
 }

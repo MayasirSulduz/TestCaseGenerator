@@ -330,8 +330,15 @@ if modified:
         console.log(`  [PythonRunner] Source module import warning: ${importErrMsg}`);
       }
 
+      // Write pytest.ini to eliminate deprecation warnings and configure asyncio mode
+      fs.writeFileSync(
+        path.join(tempDir, 'pytest.ini'),
+        `[pytest]\nasyncio_mode = auto\nasyncio_default_fixture_loop_scope = function\n`,
+        'utf-8'
+      );
+
       // ── Run pytest with json & term coverage ──
-      const cmd = `python3 -m pytest test_${baseName}.py --cov=${baseName} --cov-report=json:coverage.json --cov-report=term-missing -v --tb=short -W ignore::DeprecationWarning`;
+      const cmd = `python3 -m pytest test_${baseName}.py -q --tb=short -rA --maxfail=10 --disable-warnings --cov=${baseName} --cov-report=json:coverage.json --cov-report=term-missing`;
 
       let stdout = '';
       let stderr = '';
@@ -346,6 +353,7 @@ if modified:
         });
         stdout = result.stdout;
         stderr = result.stderr;
+        testPassed = true;
       } catch (err: any) {
         testPassed = false;
         stdout = err.stdout || '';
@@ -354,8 +362,35 @@ if modified:
 
       const combinedOutput = stdout + '\n' + stderr;
 
-      console.log(`  [PythonRunner] stdout length: ${stdout.length}, stderr length: ${stderr.length}`);
-      console.log(`  [PythonRunner] test_passed: ${testPassed}`);
+      const failedTestIds = [...stdout.matchAll(/^FAILED\s+(.+?)(?:\s+-\s+.*)?$/gm)]
+        .map((match) => match[1].trim())
+        .filter(Boolean);
+
+      const summaryMatch = stdout.match(/(\d+)\s+failed.*?(?:(\d+)\s+passed)?/i) || stdout.match(/(\d+)\s+passed/i);
+      let failedCount = 0;
+      let passedCount = 0;
+      if (summaryMatch) {
+        if (stdout.includes('failed')) {
+          failedCount = Number(summaryMatch[1] || 0);
+          passedCount = summaryMatch[2] ? Number(summaryMatch[2]) : 0;
+        } else {
+          failedCount = 0;
+          passedCount = Number(summaryMatch[1] || 0);
+        }
+      }
+
+      const isCollectionError =
+        /ERROR collecting|ImportError|SyntaxError|ModuleNotFoundError/i.test(stdout) ||
+        /ERROR collecting|ImportError|SyntaxError|ModuleNotFoundError/i.test(stderr);
+
+      console.log(`  [PythonRunner] Pytest exit code: ${testPassed ? 0 : 1}`);
+      console.log(`  [PythonRunner] Failed tests (${failedTestIds.length}): ${failedTestIds.join(', ') || 'none'}`);
+      if (!testPassed) {
+        console.log(`---- pytest stdout ----`);
+        console.log(stdout.length > 4000 ? '... [truncated top] ...\n' + stdout.slice(-4000) : stdout);
+        console.log(`---- pytest stderr ----`);
+        console.log(stderr.length > 2000 ? stderr.slice(-2000) : stderr);
+      }
 
       // ── Parse machine-readable coverage.json report if available ──
       const jsonCovPath = path.join(tempDir, 'coverage.json');
@@ -415,12 +450,15 @@ if modified:
           coverage_table: tableLines.length ? tableLines.join('\n') : combinedOutput.slice(0, 500),
           test_passed: testPassed,
           stdout,
-          stderr
+          stderr,
+          failedTests: failedTestIds,
+          failedCount,
+          passedTests: passedCount,
+          collectionError: isCollectionError
         };
       }
 
       // ── No coverage found — extract useful error info ──
-      // Try to find passed/failed counts
       const passedMatch = combinedOutput.match(/(\d+) passed/);
       const failedMatch = combinedOutput.match(/(\d+) failed/);
       const errorMatch = combinedOutput.match(/(\d+) error/);
@@ -438,7 +476,11 @@ if modified:
           ? `Tests: ${statusSummary.trim()}. Coverage parsing failed.`
           : 'Failed to parse pytest coverage output.',
         stdout: combinedOutput.slice(0, 4000),
-        stderr: combinedOutput.slice(0, 4000)
+        stderr: combinedOutput.slice(0, 4000),
+        failedTests: failedTestIds,
+        failedCount,
+        passedTests: passedCount,
+        collectionError: isCollectionError
       };
     } catch (error: any) {
       return {
