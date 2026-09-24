@@ -5,6 +5,7 @@ export interface ITestRunner {
     sourceCode: string,
     testCode: string,
     filename: string,
-    framework: string
+    framework: string,
+    isFinalMeasurement?: boolean
   ): Promise<CoverageResult>;
 }

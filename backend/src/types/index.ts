@@ -18,6 +18,11 @@ export interface CoverageResult {
   failedTests?: string[];
   failedCount?: number;
   passedTests?: number;
+  skippedCount?: number;
+  errorCount?: number;
+  collectedCount?: number;
+  executedCount?: number;
+  passRate?: number;
   collectionError?: boolean;
 }
 

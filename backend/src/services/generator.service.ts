@@ -261,15 +261,43 @@ function looksTruncated(code: string): boolean {
   );
 }
 
+function extractFailureBlock(stdout: string, nodeId: string): string {
+  const escaped = nodeId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(
+    `^_{5,}\\s*${escaped.replace(/.*?\.py::/, '')}[\\s\\S]*?(?=^_{5,}|^={5,}|^FAILED\\s|\\Z)`,
+    'm'
+  );
+  const match = stdout.match(pattern);
+  if (match) {
+    return match[0].trim();
+  }
+  const failedLine = stdout
+    .split('\n')
+    .find((line) => line.startsWith(`FAILED ${nodeId}`));
+  return failedLine ?? `No detailed failure block found for ${nodeId}`;
+}
+
 function validateRepairFunction(
   candidateFunction: string,
   expectedName: string
 ): { ok: boolean; error?: string } {
-  const containsDef = candidateFunction.includes(`def ${expectedName}(`);
-  if (!containsDef) {
+  const allowedStart =
+    candidateFunction.startsWith(`def ${expectedName}(`) ||
+    candidateFunction.startsWith(`@pytest.mark.asyncio\nasync def ${expectedName}(`) ||
+    candidateFunction.startsWith(`@pytest.mark.asyncio\ndef ${expectedName}(`) ||
+    candidateFunction.includes(`def ${expectedName}(`);
+
+  if (!allowedStart) {
     return {
       ok: false,
-      error: `Repair must contain def ${expectedName}(`
+      error: `Candidate must define only ${expectedName}.`
+    };
+  }
+
+  if (candidateFunction.includes('asyncio.run(')) {
+    return {
+      ok: false,
+      error: 'Async repair must not use asyncio.run().'
     };
   }
 
@@ -325,28 +353,24 @@ function buildSingleTestRepairPrompt(input: {
   relevantAppSource: string;
 }): string {
   return `
-You are repairing exactly one failing pytest test.
+Repair exactly ONE pytest test function.
 
-Return ONLY one complete top-level Python function named exactly:
+Return only valid Python code for this one function:
 ${input.testName}
 
-Hard rules:
-- Start exactly with: def ${input.testName}( (or @pytest.mark.asyncio\\nasync def ${input.testName}( if async)
-- Return no imports.
-- Return no markdown fences.
-- Return no prose, explanation, comments, classes, fixtures, or other tests.
-- Do not modify application code.
-- Do not modify any test except ${input.testName}.
-- Use the actual behavior shown by the source code, not assumed behavior.
-- All strings, brackets, parentheses, and calls must be complete and closed.
-- If behavior cannot be verified from the provided source, use:
-  pytest.skip("insufficient verified behavior")
-- The result must parse with Python ast.parse.
+Rules:
+- Begin exactly with: def ${input.testName}( (or @pytest.mark.asyncio\nasync def ${input.testName}( if async)
+- Do not return imports, markdown, explanation, fixtures, classes, helpers, or other tests.
+- Do not modify app.py.
+- Use the actual app.py behavior and constructor signatures provided.
+- The function must parse with ast.parse.
+- Do not use asyncio.run().
+- If this is an async test, use @pytest.mark.asyncio and await the coroutine.
 
 PYTEST FAILURE:
 ${input.failureOutput}
 
-CURRENT FAILING TEST:
+CURRENT TEST:
 ${input.currentTest}
 
 RELEVANT app.py SOURCE:
@@ -721,19 +745,20 @@ export async function generateTestsWithCoverage(
                   continue;
                 }
 
-                const failureLine = (currentBaseline.stdout || currentBaseline.stderr || '')
-                  .split('\n')
-                  .find(line => line.includes(nodeId) || line.startsWith(`FAILED ${nodeId}`)) || `Failure for ${nodeId}`;
+                const failureBlock = extractFailureBlock(
+                  `${currentBaseline.stdout || ''}\n${currentBaseline.stderr || ''}`,
+                  nodeId
+                );
 
                 const prompt = buildSingleTestRepairPrompt({
                   testName,
-                  failureOutput: failureLine,
+                  failureOutput: failureBlock,
                   currentTest: currentFuncCode,
                   relevantAppSource: extractMissingLinesContext(sourceCode, 'All lines')
                 });
 
                 await delay(2000);
-                const rawRes = await callLLMWithFallback(prompt, 2500);
+                const rawRes = await callLLMWithFallback(prompt, 1200);
                 if (!rawRes || !rawRes.content) {
                   console.warn(`  ❌ Repair attempt for ${testName} returned empty response.`);
                   continue;
@@ -849,7 +874,20 @@ export async function generateTestsWithCoverage(
     }
   }
 
-  // ── Step 3: Build response ──────────────────────────────────────────────
+  // ── Step 3: Run final measurement pass without --maxfail for full suite score ──
+  if (runner && language === 'Python') {
+    console.log(`\n📊 Running final full-suite measurement pass (without --maxfail limits)...`);
+    const finalRun = await runner.runCoverage(sourceCode, lastKnownGoodTestCode, filename, framework, true);
+    if (!finalRun.collectionError) {
+      coverageResult = finalRun;
+      if (finalRun.coverage > 0) {
+        lastExecutableCoverage = Math.max(lastExecutableCoverage, finalRun.coverage);
+      }
+      if (finalRun.test_passed) {
+        lastPassingCoverage = Math.max(lastPassingCoverage, finalRun.coverage);
+      }
+    }
+  }
 
   const executionTimeMs = Date.now() - startTime;
   const executionTimeSec = (executionTimeMs / 1000).toFixed(1);
