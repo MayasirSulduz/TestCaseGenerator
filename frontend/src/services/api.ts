@@ -79,6 +79,104 @@ export const generateTests = async (
   }
 };
 
+export const generateTestsStream = async (
+  code: string,
+  language: string,
+  framework: string,
+  coverageTarget: number,
+  filename?: string,
+  onLog?: (tag: string, text: string) => void,
+  onTrial?: (trial: any) => void
+): Promise<GenerateTestsResult> => {
+  const url = `${API_BASE_URL}/api/generate-tests-stream`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, language, framework, coverageTarget, filename })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Stream request failed (${response.status}): ${errorText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('ReadableStream not supported by browser environment.');
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalResult: GenerateTestsResult | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split('\n\n');
+    buffer = chunks.pop() ?? ''; // keep trailing buffer
+
+    for (const chunk of chunks) {
+      if (!chunk.trim()) continue;
+      let eventType = 'message';
+      let dataStr = '';
+
+      for (const line of chunk.split('\n')) {
+        if (line.startsWith('event:')) {
+          eventType = line.replace('event:', '').trim();
+        } else if (line.startsWith('data:')) {
+          dataStr = line.replace('data:', '').trim();
+        }
+      }
+
+      if (dataStr) {
+        try {
+          const parsed = JSON.parse(dataStr);
+          if (eventType === 'log') {
+            onLog?.(parsed.tag, parsed.text);
+          } else if (eventType === 'trial') {
+            onTrial?.(parsed);
+          } else if (eventType === 'done' || eventType === 'result') {
+            finalResult = parsed;
+          } else if (eventType === 'error') {
+            throw new Error(parsed.message || 'Stream server error');
+          }
+        } catch (e: any) {
+          if (eventType === 'error') throw e;
+        }
+      }
+    }
+  }
+
+  // Check remaining trailing buffer if stream ended
+  if (!finalResult && buffer.trim()) {
+    let eventType = 'message';
+    let dataStr = '';
+    for (const line of buffer.split('\n')) {
+      if (line.startsWith('event:')) {
+        eventType = line.replace('event:', '').trim();
+      } else if (line.startsWith('data:')) {
+        dataStr = line.replace('data:', '').trim();
+      }
+    }
+    if (dataStr) {
+      try {
+        const parsed = JSON.parse(dataStr);
+        if (eventType === 'done' || eventType === 'result') {
+          finalResult = parsed;
+        }
+      } catch (e) {}
+    }
+  }
+
+  if (!finalResult) {
+    throw new Error('Stream ended without returning complete test generation response');
+  }
+
+  return finalResult;
+};
+
 export const fixTests = async (
   testCode: string,
   errorMessage: string,

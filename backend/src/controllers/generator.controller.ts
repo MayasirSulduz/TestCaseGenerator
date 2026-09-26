@@ -34,6 +34,45 @@ export async function handleGenerateTests(req: Request, res: Response): Promise<
   }
 }
 
+export async function handleGenerateTestsStream(req: Request, res: Response): Promise<void> {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const sendEvent = (event: string, data: any) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    const dto: GenerateTestsRequestDTO = req.body || {};
+
+    if (!dto.code || !dto.code.trim()) {
+      sendEvent('error', { message: 'No source code provided' });
+      res.end();
+      return;
+    }
+
+    const onLog = (tag: string, text: string) => {
+      sendEvent('log', { tag, text });
+    };
+
+    const onTrial = (trial: any) => {
+      sendEvent('trial', trial);
+    };
+
+    const result = await generateTestsWithCoverage(dto, onLog, onTrial);
+
+    sendEvent('done', result);
+    sendEvent('result', result);
+    res.end();
+  } catch (error: any) {
+    console.error('Error in handleGenerateTestsStream:', error);
+    sendEvent('error', { message: error?.message || 'Internal Server Error' });
+    res.end();
+  }
+}
+
 export function handleDetectFramework(req: Request, res: Response): void {
   try {
     const dto: DetectFrameworkRequestDTO = req.body || {};

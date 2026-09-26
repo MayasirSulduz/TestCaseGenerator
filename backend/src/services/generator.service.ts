@@ -585,7 +585,9 @@ from ${moduleName} import *
 // ── Main Entry Point ──────────────────────────────────────────────────────────
 
 export async function generateTestsWithCoverage(
-  request: GenerateTestsRequestDTO
+  request: GenerateTestsRequestDTO,
+  onLog?: (tag: string, text: string) => void,
+  onTrial?: (trial: any) => void
 ): Promise<GenerateTestsResponseDTO> {
   const startTime = Date.now();
   const sourceCode = (request.code || '').trim();
@@ -594,6 +596,11 @@ export async function generateTestsWithCoverage(
   const coverageTarget = request.coverageTarget || 80;
   const filename = request.filename || 'app';
 
+  const emitLog = (tag: string, text: string) => {
+    console.log(`[${tag}] ${text}`);
+    if (onLog) onLog(tag, text);
+  };
+
   if (!sourceCode) {
     return {
       status: 'error',
@@ -601,11 +608,8 @@ export async function generateTestsWithCoverage(
     };
   }
 
-  console.log(`\n============================================================`);
-  console.log(`Target Coverage: ${coverageTarget}%`);
-  console.log(`Language: ${language} | Framework: ${framework}`);
-  console.log(`Filename: ${filename}`);
-  console.log(`============================================================\n`);
+  emitLog('INFRA', `Initializing local test runner sandbox for ${language}...`);
+  emitLog('TEST', `Target source file: ${filename} | Framework: ${framework} | Goal: ${coverageTarget}%`);
 
   const moduleName = filename
     .replace(/\.(py|java|js|ts|jsx|tsx)$/i, '')
@@ -619,7 +623,7 @@ export async function generateTestsWithCoverage(
   let fallbackReason: string | undefined;
 
   if (shouldChunk(sourceCode)) {
-    console.log('📦 Source code exceeds chunk threshold — using chunked generation...');
+    emitLog('TEST', '📦 Source code exceeds chunk threshold — using chunked generation...');
     const chunkedResult = await generateTestsForChunks(
       sourceCode, language, framework, coverageTarget, filename, moduleName
     );
@@ -638,7 +642,7 @@ export async function generateTestsWithCoverage(
     fallbackUsed = chunkedResult.llmResult.fallbackUsed;
     fallbackReason = chunkedResult.llmResult.fallbackReason;
   } else {
-    console.log('Calling LLM for initial test generation...');
+    emitLog('TEST', 'Calling LLM for initial test generation...');
     const initialPrompt = buildInitialPrompt(
       sourceCode, language, framework, coverageTarget, filename, moduleName
     );
@@ -664,6 +668,8 @@ export async function generateTestsWithCoverage(
     }
   }
 
+  emitLog('TEST', `✓ Initial testsuite generated (${testCode.length} bytes code). Starting sandbox runner...`);
+
   // ── Step 2: Transactional Candidate-Based Iterative Loop ─────────────────
 
   const runner = getRunnerForLanguage(language);
@@ -674,12 +680,11 @@ export async function generateTestsWithCoverage(
   let lastKnownGoodTestCode = testCode;
   let lastExecutableCoverage = 0;
   let lastPassingCoverage = 0;
+  const iterationHistory: { trialNumber: number; coverage: number; status: 'failed' | 'refining' | 'passed'; note: string }[] = [];
 
   if (runner) {
     while (iteration <= maxIterations) {
-      console.log(`\n------------------------------------------------------------`);
-      console.log(`Iteration ${iteration}/${maxIterations}: Running local test sandbox & coverage analysis...`);
-      console.log(`------------------------------------------------------------`);
+      emitLog('AUTO-REPAIR', `⚡ Starting Iteration ${iteration}/${maxIterations}: Running local ${framework} sandbox & measuring coverage...`);
 
       coverageResult = await runner.runCoverage(sourceCode, lastKnownGoodTestCode, filename, framework);
 
@@ -693,7 +698,17 @@ export async function generateTestsWithCoverage(
         lastPassingCoverage = Math.max(lastPassingCoverage, currentCoverage);
       }
 
-      console.log(`Current Coverage: ${currentCoverage}% | Max Executable Coverage: ${lastExecutableCoverage}% | Tests Passed: ${testPassed}`);
+      const trialStep = {
+        trialNumber: iteration,
+        coverage: currentCoverage,
+        status: (testPassed ? 'passed' : currentCoverage > 0 ? 'refining' : 'failed') as 'passed' | 'refining' | 'failed',
+        note: `Iteration ${iteration}/3: Local sandbox runner (${framework}) -> ${currentCoverage}% Covered`
+      };
+
+      iterationHistory.push(trialStep);
+      if (onTrial) onTrial(trialStep);
+
+      emitLog('AUTO-REPAIR', `📊 Iteration ${iteration}/${maxIterations} Outcome: Coverage ${currentCoverage}% | Tests: ${testPassed ? '✓ PASSED' : '✗ FAILED'}`);
 
       if (!testPassed) {
         const fullErr = (coverageResult.stderr || coverageResult.stdout || coverageResult.error || '');
@@ -918,7 +933,8 @@ export async function generateTestsWithCoverage(
     missingLines,
     suggestions: generateSuggestions(finalCoverage, coverageTarget, finalTestPassed),
     testPassed: finalTestPassed,
-    executionTimeSec
+    executionTimeSec,
+    trials: iterationHistory
   };
 
   return {

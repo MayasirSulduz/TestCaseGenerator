@@ -1,3 +1,10 @@
+export interface TrialStep {
+  trialNumber: number;
+  coverage: number;
+  status: 'failed' | 'refining' | 'passed';
+  note: string;
+}
+
 export interface CoverageReport {
   totalCoverage: number;
   runCommand: string;
@@ -6,6 +13,7 @@ export interface CoverageReport {
   suggestions: string[];
   testPassed?: boolean;
   executionTimeSec?: string;
+  trials?: TrialStep[];
 }
 
 export interface FrameworkDetectionResult {

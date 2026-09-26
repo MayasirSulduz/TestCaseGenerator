@@ -5,7 +5,8 @@ import {
   handleAnalyzeCoverage,
   handleDetectFramework,
   handleFixTests,
-  handleGenerateTests
+  handleGenerateTests,
+  handleGenerateTestsStream
 } from './controllers/generator.controller';
 import { handleHealthCheck } from './controllers/health.controller';
 
@@ -32,6 +33,7 @@ export function createApp(): Application {
 
   // API Routes
   app.post('/api/generate-tests', handleGenerateTests);
+  app.post('/api/generate-tests-stream', handleGenerateTestsStream);
   app.post('/api/detect-framework', handleDetectFramework);
   app.post('/api/fix-tests', handleFixTests);
   app.post('/api/analyze-coverage', handleAnalyzeCoverage);

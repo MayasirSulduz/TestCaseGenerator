@@ -91,7 +91,7 @@ const CodeViewer: React.FC<CodeViewerProps> = ({ code, fileName, framework, lang
       </div>
 
       {/* Editor Area */}
-      <div className="flex relative font-mono text-xs leading-relaxed max-h-[600px] overflow-hidden bg-[#070a12]">
+      <div className="flex relative font-mono text-xs leading-relaxed h-[260px] overflow-hidden bg-[#070a12]">
         {/* Line Numbers */}
         <div
           ref={lineNumbersRef}

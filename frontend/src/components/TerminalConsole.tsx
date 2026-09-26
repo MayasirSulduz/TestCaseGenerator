@@ -55,12 +55,12 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
   };
 
   return (
-    <div className="bg-slate-900/80 border border-slate-800/80 rounded-3xl p-5 sm:p-6 shadow-2xl backdrop-blur-xl flex flex-col justify-between h-full min-h-[300px]">
+    <div className="bg-slate-900/80 border border-slate-800/80 rounded-3xl p-4 sm:p-5 shadow-2xl backdrop-blur-xl flex flex-col justify-between h-full">
       {/* Terminal Window Header */}
-      <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+      <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
         <div className="flex items-center gap-2.5">
-          <div className="h-8 w-8 rounded-xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-            <Terminal className="h-4 w-4" />
+          <div className="h-7 w-7 rounded-xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+            <Terminal className="h-3.5 w-3.5" />
           </div>
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">
             Local Sandbox Runner
@@ -69,7 +69,7 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
 
         {/* Tab & Actions */}
         <div className="flex items-center gap-2">
-          <span className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-indigo-300 rounded-xl border border-slate-700">
+          <span className="px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-indigo-300 rounded-xl border border-slate-700">
             Console Log
           </span>
           <button
@@ -91,11 +91,11 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
         </div>
       </div>
 
-      {/* Terminal Screen Container */}
-      <div className="my-3 p-4 bg-slate-950/90 border border-slate-850 rounded-2xl font-mono text-[11px] leading-relaxed text-slate-300 h-52 overflow-y-auto space-y-2 select-text shadow-inner">
+      {/* Terminal Screen Container - Expands to fill available vertical space without outside gaps */}
+      <div className="flex-1 my-3 p-3.5 bg-slate-950/90 border border-slate-850 rounded-2xl font-mono text-[11px] leading-relaxed text-slate-300 overflow-y-auto space-y-1.5 select-text shadow-inner">
         {logs.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-500 text-xs">
-            <Terminal className="h-6 w-6 text-slate-700 mb-1" />
+          <div className="py-6 flex flex-col items-center justify-center text-slate-500 text-xs">
+            <Terminal className="h-5 w-5 text-slate-700 mb-1" />
             <span>Sandbox runner idle. Click Generate to start execution...</span>
           </div>
         ) : (
@@ -126,7 +126,7 @@ export const TerminalConsole: React.FC<TerminalConsoleProps> = ({
       </div>
 
       {/* Terminal Status Bar */}
-      <div className="pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
         <span className="flex items-center gap-1.5">
           <span
             className={`h-2 w-2 rounded-full ${

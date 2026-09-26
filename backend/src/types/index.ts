@@ -34,6 +34,7 @@ export interface CoverageReportDTO {
   suggestions: string[];
   testPassed?: boolean;
   executionTimeSec?: string;
+  trials?: { trialNumber: number; coverage: number; status: 'failed' | 'refining' | 'passed'; note: string }[];
 }
 
 export interface GenerateTestsResponseDTO {
