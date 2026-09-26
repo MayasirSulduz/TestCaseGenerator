@@ -44,27 +44,26 @@ const CodeViewer: React.FC<CodeViewerProps> = ({ code, fileName, framework, lang
   };
 
   return (
-    <div className="flex flex-col bg-slate-950 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
+    <div className="flex flex-col bg-slate-900/80 border border-slate-800/80 rounded-3xl overflow-hidden shadow-2xl backdrop-blur-xl h-full min-h-[300px]">
       {/* Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 bg-slate-900/90 border-b border-slate-800">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 bg-slate-950/90 border-b border-slate-800">
         <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+          <div className="flex items-center gap-2 text-indigo-400 font-mono font-bold text-xs">
             <Code2 className="h-4 w-4" />
+            <span>Generated {framework} Unit Tests</span>
           </div>
-          <div>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-              Generated Test Suite
-            </h3>
-            <p className="text-[11px] text-slate-500 font-mono">
-              {getTestFileName(fileName, framework)} • {language} ({framework})
-            </p>
+
+          {/* Tab Pill */}
+          <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-900 border border-slate-800 rounded-xl text-[11px] font-mono font-medium text-slate-200 shadow-inner">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+            <span>{getTestFileName(fileName, framework)}</span>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             onClick={handleCopy}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 active:scale-95 shadow-sm"
+            className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 active:scale-95 shadow-sm"
             title="Copy to clipboard"
           >
             {copied ? (
@@ -75,14 +74,14 @@ const CodeViewer: React.FC<CodeViewerProps> = ({ code, fileName, framework, lang
             ) : (
               <>
                 <Copy className="h-3.5 w-3.5 text-slate-400" />
-                <span>Copy Code</span>
+                <span>Copy</span>
               </>
             )}
           </button>
 
           <button
             onClick={handleDownload}
-            className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-indigo-600/30 transition-all flex items-center gap-1.5 active:scale-95"
+            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow-md shadow-indigo-600/30 transition-all flex items-center gap-1.5 active:scale-95"
             title="Download test file"
           >
             <Download className="h-3.5 w-3.5" />

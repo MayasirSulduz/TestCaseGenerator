@@ -5,9 +5,11 @@ import {
   AlertCircle,
   CheckCircle2,
   Cpu,
+  Menu,
   RefreshCw,
   ShieldCheck,
   Sparkles,
+  Sliders,
   Zap
 } from 'lucide-react';
 import TestGenerator from './components/TestGenerator';
@@ -17,6 +19,7 @@ import { HealthCheckResult } from './types';
 const App: React.FC = () => {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'error'>('checking');
   const [healthInfo, setHealthInfo] = useState<HealthCheckResult | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
 
   useEffect(() => {
     checkBackendHealth();
@@ -41,14 +44,27 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white antialiased">
       {/* Top Navbar Header */}
-      <header className="sticky top-0 z-50 w-full bg-[#0b0f19]/80 backdrop-blur-xl border-b border-slate-800/80 px-4 sm:px-8 lg:px-12 py-3.5 flex items-center justify-between shadow-2xl">
-        {/* Brand & Subtitle */}
+      <header className="sticky top-0 z-50 w-full bg-[#0b0f19]/90 backdrop-blur-xl border-b border-slate-800/80 px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between shadow-2xl">
+        {/* Brand & Menu Toggle */}
         <div className="flex items-center gap-3.5">
-          <div className="h-10 w-10 rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-cyan-400 p-[1px] shadow-lg shadow-indigo-500/20">
+          <button
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className={`p-2 rounded-xl border transition-all flex items-center justify-center ${
+              sidebarOpen
+                ? 'bg-indigo-600/20 border-indigo-500/40 text-indigo-400'
+                : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
+            }`}
+            title="Toggle setup controls sidebar (=)"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+
+          <div className="h-9 w-9 rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-cyan-400 p-[1px] shadow-lg shadow-indigo-500/20">
             <div className="h-full w-full bg-slate-950 rounded-[15px] flex items-center justify-center">
-              <Sparkles className="h-5 w-5 text-cyan-400 animate-pulse" />
+              <Sparkles className="h-4.5 w-4.5 text-cyan-400 animate-pulse" />
             </div>
           </div>
+
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-lg sm:text-xl font-black tracking-tight bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-transparent">
@@ -124,7 +140,7 @@ const App: React.FC = () => {
             </button>
           </div>
         ) : backendStatus === 'connected' ? (
-          <TestGenerator />
+          <TestGenerator sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} />
         ) : (
           <div className="flex flex-col items-center justify-center my-32 gap-4">
             <div className="relative flex items-center justify-center">
