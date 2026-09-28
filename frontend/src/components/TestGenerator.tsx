@@ -339,11 +339,11 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
           )}
 
           {generatedTests || loading ? (
-            /* 4-PANEL DASHBOARD (70% / 30% width split for top & 50% / 50% for bottom rows) */
-            <div className="flex flex-col gap-6 w-full">
-              {/* TOP ROW: PANEL 1 (70% CodeViewer) & PANEL 2 (30% CoverageGauge) */}
-              <div className="flex flex-col lg:flex-row gap-6 w-full items-stretch">
-                <div className="w-full lg:w-[70%] flex flex-col">
+            /* 4-PANEL DASHBOARD (60% / 40% height split for top & bottom rows; no outer page scroll) */
+            <div className="flex flex-col gap-5 w-full lg:h-[calc(100vh-140px)]">
+              {/* TOP ROW: 60% HEIGHT (70% CodeViewer / 30% CoverageGauge) */}
+              <div className="flex flex-col lg:flex-row gap-5 w-full lg:h-[58%] items-stretch">
+                <div className="w-full lg:w-[70%] h-full flex flex-col">
                   <CodeViewer
                     code={generatedTests || '// Real-time AI execution runner active... generating unit testsuite...'}
                     fileName={selectedFile ? selectedFile.name : 'module'}
@@ -352,7 +352,7 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
                   />
                 </div>
 
-                <div className="w-full lg:w-[30%] flex flex-col">
+                <div className="w-full lg:w-[30%] h-full flex flex-col">
                   <CoverageGauge
                     coverage={coverageReport ? coverageReport.totalCoverage : 0}
                     targetCoverage={coverageTarget}
@@ -365,9 +365,9 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
                 </div>
               </div>
 
-              {/* BOTTOM ROW: PANEL 3 (50% TerminalConsole) & PANEL 4 (50% Real Metrics) */}
-              <div className="flex flex-col lg:flex-row gap-6 w-full items-stretch">
-                <div className="w-full lg:w-[50%] flex flex-col">
+              {/* BOTTOM ROW: 40% HEIGHT (50% TerminalConsole / 50% Real Metrics) */}
+              <div className="flex flex-col lg:flex-row gap-5 w-full lg:h-[42%] items-stretch">
+                <div className="w-full lg:w-[50%] h-full flex flex-col">
                   <TerminalConsole
                     logs={logs}
                     onClearLogs={() => setLogs([])}

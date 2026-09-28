@@ -44,9 +44,9 @@ const CodeViewer: React.FC<CodeViewerProps> = ({ code, fileName, framework, lang
   };
 
   return (
-    <div className="flex flex-col bg-slate-900/80 border border-slate-800/80 rounded-3xl overflow-hidden shadow-2xl backdrop-blur-xl h-full min-h-[300px]">
+    <div className="flex flex-col bg-slate-900/80 border border-slate-800/80 rounded-3xl overflow-hidden shadow-2xl backdrop-blur-xl h-full w-full">
       {/* Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 bg-slate-950/90 border-b border-slate-800">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 bg-slate-950/90 border-b border-slate-800 shrink-0">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 text-indigo-400 font-mono font-bold text-xs">
             <Code2 className="h-4 w-4" />
@@ -91,11 +91,11 @@ const CodeViewer: React.FC<CodeViewerProps> = ({ code, fileName, framework, lang
       </div>
 
       {/* Editor Area */}
-      <div className="flex relative font-mono text-xs leading-relaxed h-[260px] overflow-hidden bg-[#070a12]">
+      <div className="flex flex-1 h-full relative font-mono text-xs leading-relaxed overflow-hidden bg-[#070a12]">
         {/* Line Numbers */}
         <div
           ref={lineNumbersRef}
-          className="select-none py-4 px-3.5 text-right text-slate-600 bg-slate-900/30 border-r border-slate-850 overflow-hidden font-mono min-w-[50px]"
+          className="select-none py-3.5 px-3.5 text-right text-slate-600 bg-slate-900/30 border-r border-slate-850 overflow-hidden font-mono min-w-[50px] h-full"
         >
           <pre>{lineNumbers}</pre>
         </div>
@@ -103,7 +103,7 @@ const CodeViewer: React.FC<CodeViewerProps> = ({ code, fileName, framework, lang
         {/* Code Content */}
         <div
           ref={codeContainerRef}
-          className="py-4 px-5 overflow-auto w-full text-slate-200 selection:bg-indigo-500 selection:text-white"
+          className="py-3.5 px-5 overflow-auto w-full h-full text-slate-200 selection:bg-indigo-500 selection:text-white"
         >
           <pre>
             <code>{code}</code>
