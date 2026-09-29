@@ -113,7 +113,17 @@ export class JavaScriptRunner implements ITestRunner {
       };
       fs.writeFileSync(path.join(tempDir, 'jest.config.json'), JSON.stringify(jestConfig, null, 2), 'utf-8');
 
-      let cmd = 'npx jest --config=jest.config.json --coverage';
+      let jestBin = 'npx jest';
+      try {
+        const resolved = require.resolve('jest/bin/jest', { paths: [backendNodeModules, backendDir] });
+        if (resolved) {
+          jestBin = `node "${resolved}"`;
+        }
+      } catch {
+        jestBin = 'npx jest';
+      }
+
+      let cmd = `${jestBin} --config=jest.config.json --coverage --runInBand --maxWorkers=2`;
       if (framework === 'Mocha') {
         cmd = 'npx nyc mocha *.test.js';
       }

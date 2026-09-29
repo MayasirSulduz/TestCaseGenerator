@@ -339,53 +339,39 @@ if modified:
         f.write(cleaned)
     print("AST_CLEANED")
 `;
-        const sanitizePyPath = path.join(tempDir, '_sanitize.py');
-        fs.writeFileSync(sanitizePyPath, sanitizeScript, 'utf-8');
-        const astCheck = await execAsync(`python3 _sanitize.py test_${baseName}.py "${tempDir}"`, { cwd: tempDir, timeout: 15000 });
-        if (astCheck.stdout.includes('AST_CLEANED')) {
-          testCode = fs.readFileSync(testFile, 'utf-8');
-          console.log(`  [PythonRunner] 🧹 Fixed AST syntax errors & commented out broken top-level statements in test_${baseName}.py`);
-        }
-      } catch (astErr: any) {
-        console.log(`  [PythonRunner] AST sanitization warning: ${astErr?.message || astErr}`);
-      }
-
-      // Fast-fail AST check: verify test code is valid Python before running Pytest
-      try {
-        await execAsync(`python3 -c "import ast; ast.parse(open('test_${baseName}.py', encoding='utf-8').read())"`, { cwd: tempDir, timeout: 10000 });
+        // Combined fast single-shot pre-flight check (AST validation + source import check)
+        const combinedPreflight = `import ast, sys, os
+sys.path.insert(0, '.')
+try:
+    with open('test_${baseName}.py', 'r', encoding='utf-8') as f:
+        ast.parse(f.read())
+except Exception as e:
+    sys.stderr.write('AST SyntaxError: ' + str(e) + '\\n')
+    sys.exit(1)
+try:
+    import ${baseName}
+except Exception as e:
+    sys.stderr.write('Import warning: ' + str(e) + '\\n')
+`;
+        const preflightResult = await execAsync(`python3 -c "${combinedPreflight.replace(/\n/g, '; ')}"`, {
+          cwd: tempDir,
+          timeout: 10000,
+          env: { ...process.env, PYTHONPATH: tempDir }
+        });
       } catch (syntaxErr: any) {
         const syntaxMsg = syntaxErr.stderr || syntaxErr.stdout || syntaxErr.message || 'SyntaxError during Python AST parse';
-        console.log(`  [PythonRunner] ❌ Fast-fail: Generated test code has AST syntax errors. Skipping Pytest execution.`);
-
-        const lineMatch = syntaxMsg.match(/line (\d+)/i);
-        if (lineMatch) {
-          const errLineNum = parseInt(lineMatch[1], 10);
-          console.log(`\n  ── AST Syntax Error Location (Line ${errLineNum}) ──`);
-          console.log(printErrorContext(testCode, errLineNum));
-          console.log(`  ── End Syntax Error Context ──\n`);
+        if (syntaxMsg.includes('AST SyntaxError')) {
+          console.log(`  [PythonRunner] ❌ Fast-fail: Generated test code has AST syntax errors.`);
+          return {
+            success: false,
+            coverage: 0,
+            test_passed: false,
+            error: `AST SyntaxError: Generated test file is not valid Python. Traceback:\n${syntaxMsg}`,
+            stdout: syntaxMsg,
+            stderr: syntaxMsg,
+            collectionError: true
+          };
         }
-
-        return {
-          success: false,
-          coverage: 0,
-          test_passed: false,
-          error: `AST SyntaxError: Generated test file is not valid Python. Traceback:\n${syntaxMsg}`,
-          stdout: syntaxMsg,
-          stderr: syntaxMsg,
-          collectionError: true
-        };
-      }
-
-      // ── Pre-flight: check if the source module can be imported ──
-      try {
-        await execAsync(
-          `python3 -c "import sys; sys.path.insert(0,'.'); import ${baseName}"`,
-          { cwd: tempDir, timeout: 15000, env: { ...process.env, PYTHONPATH: tempDir } }
-        );
-        console.log(`  [PythonRunner] Source module '${baseName}' imported OK`);
-      } catch (importErr: any) {
-        const importErrMsg = (importErr.stderr || importErr.stdout || '').slice(0, 300);
-        console.log(`  [PythonRunner] Source module import warning: ${importErrMsg}`);
       }
 
       // Write pytest.ini to eliminate deprecation warnings and configure asyncio mode
