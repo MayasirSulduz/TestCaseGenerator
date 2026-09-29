@@ -32,7 +32,7 @@ api.interceptors.response.use(
 
 export const checkHealth = async (): Promise<HealthCheckResult> => {
   try {
-    const response = await api.get<HealthCheckResult>('/api/health');
+    const response = await axios.get<HealthCheckResult>(`${API_BASE_URL}/api/health`, { timeout: 3000 });
     return response.data;
   } catch (error) {
     console.error('Health check failed:', error);

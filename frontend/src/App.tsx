@@ -17,7 +17,7 @@ import { checkHealth } from './services/api';
 import { HealthCheckResult } from './types';
 
 const App: React.FC = () => {
-  const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'error'>('checking');
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'error'>('connected');
   const [healthInfo, setHealthInfo] = useState<HealthCheckResult | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
 

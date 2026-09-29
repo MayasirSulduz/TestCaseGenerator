@@ -507,8 +507,8 @@ from ${moduleName} import *
 
 `;
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
+  // Generate test code for all chunks in parallel for maximum performance
+  const chunkPromises = chunks.map(async (chunk, i) => {
     console.log(`  📝 Part ${i + 1}/${chunks.length}: ${chunk.name} (lines ${chunk.startLine}-${chunk.endLine})`);
 
     const chunkPrompt = (language === 'Python')
@@ -516,6 +516,13 @@ from ${moduleName} import *
       : buildInitialPrompt(chunk.code, language, framework, coverageTarget, filename, moduleName);
 
     const result = await callLLMWithFallback(chunkPrompt, 3500);
+    return { index: i, chunk, result };
+  });
+
+  const responses = await Promise.all(chunkPromises);
+
+  for (const item of responses.sort((a, b) => a.index - b.index)) {
+    const { index: i, chunk, result } = item;
     if (!result || !result.content) {
       console.warn(`  ⚠ Part ${i + 1} failed — skipping`);
       allFailures.push(`Part ${i + 1} (${chunk.name}): all fallback models failed`);
@@ -560,10 +567,6 @@ from ${moduleName} import *
       let code = sanitizeTestImports(extractCodeFromMarkdown(result.content));
       chunkResults.push(code);
       console.log(`  ✓ Part ${i + 1}/${chunks.length} testcases generated and appended successfully!`);
-    }
-
-    if (i < chunks.length - 1) {
-      await delay(1000);
     }
   }
 
