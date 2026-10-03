@@ -118,38 +118,24 @@ const App: React.FC = () => {
 
       {/* Main Full-Width Content Container */}
       <main className="w-full flex-1 px-4 sm:px-8 lg:px-12 py-6">
-        {backendStatus === 'error' ? (
-          <div className="w-full max-w-xl mx-auto my-16 p-8 bg-slate-900/80 border border-red-500/20 rounded-3xl shadow-2xl backdrop-blur-xl flex flex-col items-center text-center gap-5">
-            <div className="h-16 w-16 bg-red-500/10 border border-red-500/30 rounded-2xl flex items-center justify-center text-red-400 shadow-lg">
-              <AlertCircle className="h-8 w-8" />
-            </div>
-            <div>
-              <h2 className="text-xl font-bold text-slate-100">Backend Connection Failed</h2>
-              <p className="text-sm text-slate-400 mt-1">
-                Make sure the Node.js TypeScript server is running on port 5000:
-              </p>
-            </div>
-            <div className="w-full p-3.5 bg-slate-950 border border-slate-800 rounded-2xl text-indigo-400 font-mono text-xs text-center select-all">
-              npm run dev
+        {backendStatus === 'error' && (
+          <div className="mb-6 p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-amber-300 text-xs flex items-center justify-between shadow-lg backdrop-blur-xl">
+            <div className="flex items-center gap-2.5">
+              <AlertCircle className="h-4 w-4 shrink-0 text-amber-400" />
+              <span>
+                Backend server is connecting or offline. If running locally, start server with <code className="bg-slate-900 px-1.5 py-0.5 rounded text-indigo-300 font-mono text-[11px]">npm run dev</code> in <code className="bg-slate-900 px-1.5 py-0.5 rounded text-indigo-300 font-mono text-[11px]">backend</code> directory.
+              </span>
             </div>
             <button
               onClick={checkBackendHealth}
-              className="mt-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-semibold text-xs rounded-xl shadow-lg shadow-indigo-600/30 transition-all active:scale-95 flex items-center gap-2"
+              className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 rounded-xl font-semibold flex items-center gap-1.5 text-[11px] transition-all shrink-0 ml-3"
             >
-              <RefreshCw className="h-4 w-4" /> Retry Connection
+              <RefreshCw className="h-3 w-3" /> Retry
             </button>
           </div>
-        ) : backendStatus === 'connected' ? (
-          <TestGenerator sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} />
-        ) : (
-          <div className="flex flex-col items-center justify-center my-32 gap-4">
-            <div className="relative flex items-center justify-center">
-              <div className="h-12 w-12 rounded-full border-2 border-indigo-500/20 border-t-indigo-500 animate-spin"></div>
-              <Zap className="h-5 w-5 text-indigo-400 absolute" />
-            </div>
-            <p className="text-xs font-medium text-slate-400">Connecting to AI execution engine...</p>
-          </div>
         )}
+
+        <TestGenerator sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} />
       </main>
 
       {/* Footer */}
