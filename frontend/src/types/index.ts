@@ -56,6 +56,8 @@ export interface CodeViewerProps {
   fileName: string;
   framework: string;
   language: string;
+  isLoading?: boolean;
+  statusPhase?: 'thinking' | 'generating' | 'sandbox' | 'complete';
 }
 
 export interface FileUploadProps {
