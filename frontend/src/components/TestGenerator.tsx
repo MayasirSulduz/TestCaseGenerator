@@ -88,7 +88,9 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
     }
   };
 
-  const handleGenerateTests = async () => {
+  const executeTestGeneration = async (targetToUse?: number, existingTestsuite?: string) => {
+    const activeTarget = targetToUse || coverageTarget;
+
     if (!sourceCode) {
       setError('Please upload or select a source file first');
       return;
@@ -103,8 +105,10 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
     setError('');
     setSuccess('');
     setLoading(true);
-    setGeneratedTests('');
-    setCoverageReport(null);
+    if (!existingTestsuite) {
+      setGeneratedTests('');
+      setCoverageReport(null);
+    }
     setModelUsed('');
     setLogs([]);
     setLiveExecutionTime('0.0');
@@ -124,7 +128,7 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
         sourceCode,
         language,
         framework,
-        coverageTarget,
+        activeTarget,
         filename,
         (tag, text) => {
           addLog(tag as any, text);
@@ -152,7 +156,8 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
               trials: currentTrials
             };
           });
-        }
+        },
+        existingTestsuite
       );
 
       clearInterval(timerInterval);
@@ -170,27 +175,15 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
           : [
               {
                 trialNumber: 1,
-                coverage: Math.min(finalCov, 66),
-                status: 'failed',
-                note: `Iteration 1/3: Running local sandbox runner (${framework}) & measuring line coverage...`
-              },
-              {
-                trialNumber: 2,
-                coverage: Math.min(finalCov, 80),
-                status: 'refining',
-                note: `Iteration 2/3: Running local sandbox runner (${framework}) & measuring line coverage...`
-              },
-              {
-                trialNumber: 3,
                 coverage: finalCov,
-                status: finalCov >= coverageTarget ? 'passed' : 'refining',
-                note: `Iteration 3/3: Running local sandbox runner (${framework}) -> ${finalCov}% Covered`
+                status: finalCov >= activeTarget ? 'passed' : 'refining',
+                note: `Iteration 1/1: Running local sandbox runner (${framework}) -> ${finalCov}% Covered (${finalCov >= activeTarget ? 'Goal Achieved' : 'Refined'})`
               }
             ];
 
         const realTrials: TrialStep[] = rawTrials.map((t, idx) => {
           if (idx === rawTrials.length - 1) {
-            const isPassed = finalCov >= coverageTarget;
+            const isPassed = finalCov >= activeTarget;
             return {
               ...t,
               coverage: Math.max(t.coverage, finalCov),
@@ -248,6 +241,16 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleGenerateTests = () => executeTestGeneration();
+
+  const handleIncreaseTarget = (newTarget: number) => {
+    setCoverageTarget(newTarget);
+    toast.info(`🚀 Boosting coverage target to ${newTarget}%...`, {
+      description: `Auto-repairing existing testsuite & generating targeted tests for missing lines`
+    });
+    executeTestGeneration(newTarget, generatedTests);
   };
 
   return (
@@ -376,6 +379,7 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
                     linesCoveredText={coverageReport?.totalCoverage ? `${coverageReport.totalCoverage}% Covered` : undefined}
                     isLoading={loading}
                     trials={coverageReport?.trials}
+                    onIncreaseTarget={handleIncreaseTarget}
                   />
                 </div>
               </div>
@@ -390,9 +394,9 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
                   />
                 </div>
 
-                <div className="w-full lg:w-[50%] bg-slate-900/80 border border-slate-800/80 rounded-3xl p-4 sm:p-5 shadow-2xl backdrop-blur-xl flex flex-col justify-between h-full">
+                <div className="w-full lg:w-[50%] bg-slate-900/80 border border-slate-800/80 rounded-3xl p-4 sm:p-5 shadow-2xl backdrop-blur-xl flex flex-col h-full overflow-hidden">
                   {/* Header */}
-                  <div className="flex items-center justify-between border-b border-slate-800/80 pb-3.5">
+                  <div className="flex items-center justify-between border-b border-slate-800/80 pb-3 shrink-0">
                     <div className="flex items-center gap-2.5">
                       <div className="h-8 w-8 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
                         <ShieldCheck className="h-4 w-4" />
@@ -423,65 +427,68 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
                     </div>
                   </div>
 
-                  {/* Content Boxes */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-3 text-xs">
-                    <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex flex-col gap-1">
-                      <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1">
-                        <Terminal className="h-3 w-3 text-indigo-400" /> Runner Command:
-                      </span>
-                      <code className="text-indigo-300 font-mono bg-slate-900 p-2 rounded-xl border border-slate-850 overflow-x-auto select-all text-[11px]">
-                        {coverageReport?.runCommand || `python3 -m pytest test.py --cov`}
-                      </code>
+                  {/* Scrollable Content Container */}
+                  <div className="flex flex-col gap-3 my-2 overflow-y-auto custom-scrollbar flex-1 min-h-0 pr-1">
+                    {/* Runner Command & Missing Lines */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs shrink-0">
+                      <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex flex-col gap-1">
+                        <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1">
+                          <Terminal className="h-3 w-3 text-indigo-400" /> Runner Command:
+                        </span>
+                        <code className="text-indigo-300 font-mono bg-slate-900 p-2 rounded-xl border border-slate-850 overflow-x-auto select-all text-[11px] block truncate">
+                          {coverageReport?.runCommand || `python3 -m pytest test.py --cov`}
+                        </code>
+                      </div>
+
+                      <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex flex-col gap-1">
+                        <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1">
+                          <GitBranch className="h-3 w-3 text-amber-400" /> Missing / Uncovered Lines:
+                        </span>
+                        <span className="text-amber-300 font-mono bg-slate-900 p-2 rounded-xl border border-slate-850 text-[11px] max-h-20 overflow-y-auto custom-scrollbar block">
+                          {coverageReport?.missingLines || 'None'}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex flex-col gap-1">
-                      <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1">
-                        <GitBranch className="h-3 w-3 text-amber-400" /> Missing / Uncovered Lines:
-                      </span>
-                      <span className="text-amber-300 font-mono bg-slate-900 p-2 rounded-xl border border-slate-850 text-[11px]">
-                        {coverageReport?.missingLines || 'None'}
-                      </span>
-                    </div>
-                  </div>
+                    {/* Execution Table / Output */}
+                    {coverageReport?.summaryTable && coverageReport.summaryTable !== 'N/A' && (
+                      <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex flex-col gap-1.5 text-xs font-mono shrink-0">
+                        <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1 font-sans">
+                          <Terminal className="h-3 w-3 text-emerald-400" /> Execution Report Table:
+                        </span>
+                        <pre className="text-slate-300 bg-slate-900 p-2.5 rounded-xl border border-slate-850 overflow-x-auto text-[10px] leading-relaxed max-h-36 overflow-y-auto custom-scrollbar">
+                          {coverageReport.summaryTable}
+                        </pre>
+                      </div>
+                    )}
 
-                  {/* Execution Table / Output */}
-                  {coverageReport?.summaryTable && coverageReport.summaryTable !== 'N/A' && (
-                    <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-2xl flex flex-col gap-1.5 text-xs font-mono overflow-hidden my-1">
-                      <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1 font-sans">
-                        <Terminal className="h-3 w-3 text-emerald-400" /> Execution Report Table:
+                    {/* Iterative Feedback Loop Summary */}
+                    <div className="p-3 bg-indigo-500/5 border border-indigo-500/20 rounded-2xl text-xs flex flex-col gap-1.5 mt-auto shrink-0">
+                      <span className="font-bold text-slate-200 flex items-center gap-1.5 text-[11px]">
+                        <Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Iterative Feedback Loop Summary:
                       </span>
-                      <pre className="text-slate-300 bg-slate-900 p-2.5 rounded-xl border border-slate-850 overflow-x-auto text-[10px] leading-relaxed max-h-24">
-                        {coverageReport.summaryTable}
-                      </pre>
+                      <ul className="space-y-1 text-slate-400 text-[11px]">
+                        {coverageReport?.suggestions && coverageReport.suggestions.length > 0 ? (
+                          coverageReport.suggestions.map((suggestion, idx) => (
+                            <li key={idx} className="flex items-start gap-1.5">
+                              <span className="text-indigo-400">•</span>
+                              <span>{suggestion}</span>
+                            </li>
+                          ))
+                        ) : (
+                          <>
+                            <li className="flex items-start gap-1.5">
+                              <span className="text-indigo-400">•</span>
+                              <span>🤖 AI Auto-Repair Agent triggered: fixing failing assertions & execution errors</span>
+                            </li>
+                            <li className="flex items-start gap-1.5">
+                              <span className="text-indigo-400">•</span>
+                              <span>Ensure mock implementations match component interfaces</span>
+                            </li>
+                          </>
+                        )}
+                      </ul>
                     </div>
-                  )}
-
-                  {/* Iterative Feedback Loop Summary */}
-                  <div className="p-3 bg-indigo-500/5 border border-indigo-500/20 rounded-2xl text-xs flex flex-col gap-1.5 mt-auto">
-                    <span className="font-bold text-slate-200 flex items-center gap-1.5 text-[11px]">
-                      <Sparkles className="h-3.5 w-3.5 text-indigo-400" /> Iterative Feedback Loop Summary:
-                    </span>
-                    <ul className="space-y-1 text-slate-400 text-[11px]">
-                      {coverageReport?.suggestions && coverageReport.suggestions.length > 0 ? (
-                        coverageReport.suggestions.map((suggestion, idx) => (
-                          <li key={idx} className="flex items-start gap-1.5">
-                            <span className="text-indigo-400">•</span>
-                            <span>{suggestion}</span>
-                          </li>
-                        ))
-                      ) : (
-                        <>
-                          <li className="flex items-start gap-1.5">
-                            <span className="text-indigo-400">•</span>
-                            <span>🤖 AI Auto-Repair Agent triggered: fixing failing assertions & execution errors</span>
-                          </li>
-                          <li className="flex items-start gap-1.5">
-                            <span className="text-indigo-400">•</span>
-                            <span>Ensure mock implementations match component interfaces</span>
-                          </li>
-                        </>
-                      )}
-                    </ul>
                   </div>
                 </div>
               </div>

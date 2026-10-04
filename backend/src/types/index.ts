@@ -4,6 +4,7 @@ export interface GenerateTestsRequestDTO {
   framework: string;
   coverageTarget?: number;
   filename?: string;
+  existingTests?: string;
 }
 
 export interface CoverageResult {

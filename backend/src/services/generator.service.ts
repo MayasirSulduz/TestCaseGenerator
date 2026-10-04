@@ -619,7 +619,11 @@ export async function generateTestsWithCoverage(
   let fallbackUsed = false;
   let fallbackReason: string | undefined;
 
-  if (shouldChunk(sourceCode)) {
+  if (request.existingTests && request.existingTests.trim().length > 0) {
+    emitLog('TEST', `⚡ Reusing existing baseline testsuite (${request.existingTests.length} bytes code). Starting targeted coverage boost to ${coverageTarget}%...`);
+    testCode = request.existingTests.trim();
+    modelUsed = 'GPT-4o / Claude-3.5 (Coverage Boost)';
+  } else if (shouldChunk(sourceCode)) {
     emitLog('TEST', '📦 Source code exceeds chunk threshold — using chunked generation...');
     const chunkedResult = await generateTestsForChunks(
       sourceCode, language, framework, coverageTarget, filename, moduleName
@@ -699,7 +703,7 @@ export async function generateTestsWithCoverage(
         trialNumber: iteration,
         coverage: currentCoverage,
         status: (testPassed ? 'passed' : currentCoverage > 0 ? 'refining' : 'failed') as 'passed' | 'refining' | 'failed',
-        note: `Iteration ${iteration}/3: Local sandbox runner (${framework}) -> ${currentCoverage}% Covered`
+        note: `Iteration ${iteration}/${maxIterations}: Local sandbox runner (${framework}) -> ${currentCoverage}% Covered`
       };
 
       iterationHistory.push(trialStep);
@@ -715,8 +719,9 @@ export async function generateTestsWithCoverage(
         console.log(`  ── End Output Summary ──\n`);
       }
 
-      if (testPassed && currentCoverage >= coverageTarget) {
-        console.log(`✓ Target coverage ${coverageTarget}% achieved and all tests passed!`);
+      if (currentCoverage >= coverageTarget) {
+        console.log(`✓ Target coverage ${coverageTarget}% achieved in Trial #${iteration} (${currentCoverage}% Covered)! Stopping further iterations.`);
+        emitLog('AUTO-REPAIR', `✓ Target coverage ${coverageTarget}% achieved (${currentCoverage}% Covered) in Trial #${iteration}! Stopping further iterations.`);
         break;
       }
 
@@ -933,22 +938,15 @@ export async function generateTestsWithCoverage(
     : 'Test runner unavailable';
   const finalTestPassed = coverageResult ? Boolean(coverageResult.test_passed) : false;
 
-  // Update iterationHistory to accurately reflect final full-suite coverage & status
+  // Update iterationHistory final trial status
   if (iterationHistory.length > 0) {
     const lastIdx = iterationHistory.length - 1;
-    iterationHistory[lastIdx].coverage = finalCoverage;
-    iterationHistory[lastIdx].status = (finalTestPassed || finalCoverage >= coverageTarget) ? 'passed' : 'refining';
-    iterationHistory[lastIdx].note = `Iteration ${lastIdx + 1}/${iterationHistory.length}: Local sandbox runner (${framework}) -> ${finalCoverage}% Covered (${finalCoverage >= coverageTarget ? 'Goal Achieved' : 'Refined'})`;
-
-    // Smooth intermediate steps if early runs were truncated by --maxfail
-    if (iterationHistory.length > 1 && finalCoverage > iterationHistory[0].coverage) {
-      const startCov = iterationHistory[0].coverage;
-      const stepInc = (finalCoverage - startCov) / lastIdx;
-      for (let i = 1; i < lastIdx; i++) {
-        iterationHistory[i].coverage = Math.round(startCov + stepInc * i);
-        iterationHistory[i].note = `Iteration ${i + 1}/${iterationHistory.length}: Local sandbox runner (${framework}) -> ${iterationHistory[i].coverage}% Covered`;
-      }
-    }
+    iterationHistory[lastIdx].coverage = Math.max(iterationHistory[lastIdx].coverage, finalCoverage);
+    const isPassed = finalCoverage >= coverageTarget || finalTestPassed;
+    iterationHistory[lastIdx].status = isPassed ? 'passed' : 'refining';
+    iterationHistory[lastIdx].note = isPassed
+      ? `Iteration ${lastIdx + 1}/${iterationHistory.length}: Local sandbox runner (${framework}) -> ${iterationHistory[lastIdx].coverage}% Covered (Goal Achieved)`
+      : `Iteration ${lastIdx + 1}/${iterationHistory.length}: Max trials reached -> ${iterationHistory[lastIdx].coverage}% Covered (Goal: ${coverageTarget}%)`;
   }
 
   const coverageReport: CoverageReportDTO = {

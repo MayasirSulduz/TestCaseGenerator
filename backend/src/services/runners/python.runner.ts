@@ -387,9 +387,7 @@ if modified:
       );
 
       // ── Run pytest with json & term coverage ──
-      const cmd = isFinalMeasurement
-        ? `python3 -m pytest test_${baseName}.py -rA --cov=${baseName} --cov-report=json:coverage.json --cov-report=term-missing`
-        : `python3 -m pytest test_${baseName}.py -q --tb=short -rA --maxfail=10 --disable-warnings --cov=${baseName} --cov-report=json:coverage.json --cov-report=term-missing`;
+      const cmd = `python3 -m pytest test_${baseName}.py -q --tb=short -rA --disable-warnings --cov=${baseName} --cov-report=json:coverage.json --cov-report=term-missing`;
 
       let stdout = '';
       let stderr = '';
