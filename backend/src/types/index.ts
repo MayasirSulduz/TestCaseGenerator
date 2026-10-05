@@ -5,6 +5,7 @@ export interface GenerateTestsRequestDTO {
   coverageTarget?: number;
   filename?: string;
   existingTests?: string;
+  targetMissingLines?: string;
 }
 
 export interface CoverageResult {

@@ -88,7 +88,7 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
     }
   };
 
-  const executeTestGeneration = async (targetToUse?: number, existingTestsuite?: string) => {
+  const executeTestGeneration = async (targetToUse?: number, existingTestsuite?: string, targetMissingLines?: string) => {
     const activeTarget = targetToUse || coverageTarget;
 
     if (!sourceCode) {
@@ -157,7 +157,8 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
             };
           });
         },
-        existingTestsuite
+        existingTestsuite,
+        targetMissingLines
       );
 
       clearInterval(timerInterval);
@@ -251,6 +252,13 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
       description: `Auto-repairing existing testsuite & generating targeted tests for missing lines`
     });
     executeTestGeneration(newTarget, generatedTests);
+  };
+
+  const handleGenerateTargetedLines = (targetLines: string) => {
+    toast.info(`🎯 Generating targeted tests for lines: ${targetLines}...`, {
+      description: `Focusing AI test generator on user-selected missing line numbers`
+    });
+    executeTestGeneration(coverageTarget, generatedTests, targetLines);
   };
 
   return (
@@ -367,6 +375,10 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
                     language={language}
                     isLoading={loading}
                     statusPhase={loading ? (generatedTests ? 'sandbox' : 'thinking') : 'complete'}
+                    sourceCode={sourceCode}
+                    missingLines={coverageReport?.missingLines}
+                    coverage={coverageReport?.totalCoverage}
+                    onGenerateTargetedLines={handleGenerateTargetedLines}
                   />
                 </div>
 

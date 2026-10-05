@@ -87,13 +87,14 @@ export const generateTestsStream = async (
   filename?: string,
   onLog?: (tag: string, text: string) => void,
   onTrial?: (trial: any) => void,
-  existingTests?: string
+  existingTests?: string,
+  targetMissingLines?: string
 ): Promise<GenerateTestsResult> => {
   const url = `${API_BASE_URL}/api/generate-tests-stream`;
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, language, framework, coverageTarget, filename, existingTests })
+    body: JSON.stringify({ code, language, framework, coverageTarget, filename, existingTests, targetMissingLines })
   });
 
   if (!response.ok) {

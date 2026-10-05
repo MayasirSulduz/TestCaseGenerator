@@ -58,6 +58,10 @@ export interface CodeViewerProps {
   language: string;
   isLoading?: boolean;
   statusPhase?: 'thinking' | 'generating' | 'sandbox' | 'complete';
+  sourceCode?: string;
+  missingLines?: string;
+  coverage?: number;
+  onGenerateTargetedLines?: (targetLines: string) => void;
 }
 
 export interface FileUploadProps {

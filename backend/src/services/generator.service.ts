@@ -719,7 +719,7 @@ export async function generateTestsWithCoverage(
         console.log(`  ── End Output Summary ──\n`);
       }
 
-      if (currentCoverage >= coverageTarget) {
+      if (!request.targetMissingLines && currentCoverage >= coverageTarget) {
         console.log(`✓ Target coverage ${coverageTarget}% achieved in Trial #${iteration} (${currentCoverage}% Covered)! Stopping further iterations.`);
         emitLog('AUTO-REPAIR', `✓ Target coverage ${coverageTarget}% achieved (${currentCoverage}% Covered) in Trial #${iteration}! Stopping further iterations.`);
         break;
@@ -866,10 +866,11 @@ export async function generateTestsWithCoverage(
           }
         }
 
-        // Coverage Expansion Pass: Whenever coverage is below goal, generate tests for missing lines
-        if (currentCoverage < coverageTarget && coverageResult.missing_lines && coverageResult.missing_lines !== 'None') {
-          emitLog('AUTO-REPAIR', `📈 Coverage ${currentCoverage}% < ${coverageTarget}%. Generating targeted tests for missing lines: ${coverageResult.missing_lines}...`);
-          const missingLines = coverageResult.missing_lines;
+        // Coverage Expansion Pass: Whenever coverage is below goal or user selected specific target lines
+        const missingLinesToTarget = request.targetMissingLines || coverageResult.missing_lines;
+        if ((currentCoverage < coverageTarget || request.targetMissingLines) && missingLinesToTarget && missingLinesToTarget !== 'None') {
+          emitLog('AUTO-REPAIR', `🎯 Generating targeted tests for lines: ${missingLinesToTarget}...`);
+          const missingLines = missingLinesToTarget;
           const nextPrompt = buildEnhancementPrompt(
             sourceCode, lastKnownGoodTestCode, currentCoverage, coverageTarget, missingLines, language, moduleName
           );
