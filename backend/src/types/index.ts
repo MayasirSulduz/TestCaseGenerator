@@ -28,6 +28,14 @@ export interface CoverageResult {
   collectionError?: boolean;
 }
 
+export interface ProjectTestFile {
+  filename: string;
+  filepath: string;
+  content: string;
+  coverage?: number;
+  isFixture?: boolean;
+}
+
 export interface CoverageReportDTO {
   totalCoverage: number;
   runCommand: string;
@@ -37,6 +45,7 @@ export interface CoverageReportDTO {
   testPassed?: boolean;
   executionTimeSec?: string;
   trials?: { trialNumber: number; coverage: number; status: 'failed' | 'refining' | 'passed'; note: string }[];
+  projectTestFiles?: ProjectTestFile[];
 }
 
 export interface GenerateTestsResponseDTO {

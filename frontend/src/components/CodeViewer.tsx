@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, CheckCircle2, Code2, Copy, Download, RefreshCw, Sparkles, Terminal, Zap, FileCode, Layers, ShieldCheck, Flame, CheckSquare, Square, Target } from 'lucide-react';
+import { Check, CheckCircle2, Code2, Copy, Download, RefreshCw, Sparkles, Terminal, Zap, FileCode, Layers, ShieldCheck, Flame, CheckSquare, Square, Target, FolderTree, Package } from 'lucide-react';
 import { CodeViewerProps } from '../types';
 import { downloadFile, getTestFileName } from '../utils/fileHelpers';
 
@@ -13,16 +13,34 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
   sourceCode,
   missingLines,
   coverage = 0,
-  onGenerateTargetedLines
+  onGenerateTargetedLines,
+  projectTestFiles = []
 }) => {
   const [activeTab, setActiveTab] = useState<'tests' | 'heatmap'>('tests');
   const [copied, setCopied] = useState<boolean>(false);
   const [displayedCode, setDisplayedCode] = useState<string>('');
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [selectedLines, setSelectedLines] = useState<Set<number>>(new Set());
+  const [selectedTestFileIdx, setSelectedTestFileIdx] = useState<number>(1); // Default to test file over fixture
 
   const codeContainerRef = useRef<HTMLDivElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
+
+  // Active code string based on selected test file in multi-file project tree
+  const activeCodeString = useMemo(() => {
+    if (projectTestFiles && projectTestFiles.length > 0 && selectedTestFileIdx < projectTestFiles.length) {
+      return projectTestFiles[selectedTestFileIdx].content;
+    }
+    return code;
+  }, [code, projectTestFiles, selectedTestFileIdx]);
+
+  // Active file display name
+  const activeDisplayFileName = useMemo(() => {
+    if (projectTestFiles && projectTestFiles.length > 0 && selectedTestFileIdx < projectTestFiles.length) {
+      return projectTestFiles[selectedTestFileIdx].filename;
+    }
+    return getTestFileName(fileName, framework);
+  }, [fileName, framework, projectTestFiles, selectedTestFileIdx]);
 
   // Parse missing line string (e.g. "73, 74, 79, 132-140, 156") into Set<number>
   const missingLineSet = useMemo(() => {
@@ -113,27 +131,28 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
 
   // Typewriter Streaming Animation Effect
   useEffect(() => {
-    if (!code) {
+    const targetCode = activeCodeString;
+    if (!targetCode) {
       setDisplayedCode('');
       setIsTyping(false);
       return;
     }
 
-    if (code.startsWith('// Real-time')) {
-      setDisplayedCode(code);
+    if (targetCode.startsWith('// Real-time')) {
+      setDisplayedCode(targetCode);
       setIsTyping(false);
       return;
     }
 
     // Split preserving whitespace and tokens
-    const tokens = code.split(/(\s+)/);
+    const tokens = targetCode.split(/(\s+)/);
     let tokenIndex = 0;
     setIsTyping(true);
 
     const interval = setInterval(() => {
       tokenIndex += 3; // Advance 3 tokens per 16ms tick
       if (tokenIndex >= tokens.length) {
-        setDisplayedCode(code);
+        setDisplayedCode(targetCode);
         setIsTyping(false);
         clearInterval(interval);
       } else {
@@ -147,14 +166,14 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
     }, 16);
 
     return () => clearInterval(interval);
-  }, [code]);
+  }, [activeCodeString]);
 
   const lineNumbers = useMemo(() => {
-    const activeText = displayedCode || code || '';
+    const activeText = displayedCode || activeCodeString || '';
     if (!activeText) return '1';
     const lines = activeText.split('\n');
     return lines.map((_, index) => index + 1).join('\n');
-  }, [displayedCode, code]);
+  }, [displayedCode, activeCodeString]);
 
   useEffect(() => {
     const codeContainer = codeContainerRef.current;
@@ -168,10 +187,10 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
 
     codeContainer.addEventListener('scroll', handleScroll);
     return () => codeContainer.removeEventListener('scroll', handleScroll);
-  }, [activeTab]);
+  }, [activeTab, selectedTestFileIdx]);
 
   const handleCopy = async () => {
-    const targetText = activeTab === 'source' ? (sourceCode || '') : code;
+    const targetText = activeTab === 'heatmap' ? (sourceCode || '') : activeCodeString;
     try {
       await navigator.clipboard.writeText(targetText);
       setCopied(true);
@@ -182,11 +201,10 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
   };
 
   const handleDownload = () => {
-    if (activeTab === 'source') {
+    if (activeTab === 'heatmap') {
       downloadFile(sourceCode || '', fileName || 'source_file');
     } else {
-      const testFileName = getTestFileName(fileName, framework);
-      downloadFile(code, testFileName);
+      downloadFile(activeCodeString, activeDisplayFileName);
     }
   };
 
@@ -235,7 +253,7 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
           {/* Active File Name Pill */}
           <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-900 border border-slate-800 rounded-xl text-[11px] font-mono font-medium text-slate-200 shadow-inner">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
-            <span>{activeTab === 'source' ? fileName : getTestFileName(fileName, framework)}</span>
+            <span>{activeTab === 'heatmap' ? fileName : activeDisplayFileName}</span>
           </div>
 
           {/* Dynamic AI Status Badges for Tests Tab */}
@@ -339,6 +357,41 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
       {activeTab === 'tests' ? (
         /* GENERATED UNIT TESTS VIEW */
         <div className="flex flex-1 h-full relative font-mono text-xs leading-relaxed overflow-hidden bg-[#070a12]">
+          {/* Project File Tree Explorer Sidebar (Rendered when projectTestFiles are present) */}
+          {projectTestFiles && projectTestFiles.length > 0 && (
+            <div className="w-52 bg-slate-950/90 border-r border-slate-800 p-2 flex flex-col gap-1 shrink-0 font-mono text-xs overflow-y-auto custom-scrollbar select-none">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2 py-1 flex items-center gap-1.5 border-b border-slate-800/80 mb-1">
+                <FolderTree className="h-3.5 w-3.5 text-indigo-400" />
+                <span>Test Suite Explorer</span>
+              </span>
+              {projectTestFiles.map((file, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setSelectedTestFileIdx(idx)}
+                  className={`w-full px-2.5 py-1.5 rounded-xl text-left transition-all flex items-center justify-between text-[11px] font-mono ${
+                    selectedTestFileIdx === idx
+                      ? 'bg-indigo-600/30 border border-indigo-500/50 text-white font-bold ring-1 ring-indigo-500/30'
+                      : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200 border border-transparent'
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5 truncate">
+                    {file.isFixture ? (
+                      <FileCode className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                    ) : (
+                      <Code2 className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                    )}
+                    <span className="truncate">{file.filename}</span>
+                  </span>
+                  {file.coverage !== undefined && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-900 text-emerald-400 border border-slate-800 shrink-0">
+                      {file.coverage}%
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Line Numbers */}
           <div
             ref={lineNumbersRef}
@@ -353,7 +406,7 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
             className="py-3.5 px-5 overflow-auto w-full h-full text-slate-200 selection:bg-indigo-500 selection:text-white"
           >
             <pre>
-              <code>{displayedCode || code}</code>
+              <code>{displayedCode || activeCodeString}</code>
               {isTyping && <span className="inline-block w-2 h-4 ml-0.5 bg-indigo-400 animate-pulse vertical-bottom">▌</span>}
             </pre>
           </div>

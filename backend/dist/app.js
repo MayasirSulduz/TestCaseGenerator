@@ -28,6 +28,7 @@ function createApp() {
     app.use(express_1.default.urlencoded({ extended: true, limit: '10mb' }));
     // API Routes
     app.post('/api/generate-tests', generator_controller_1.handleGenerateTests);
+    app.post('/api/generate-tests-stream', generator_controller_1.handleGenerateTestsStream);
     app.post('/api/detect-framework', generator_controller_1.handleDetectFramework);
     app.post('/api/fix-tests', generator_controller_1.handleFixTests);
     app.post('/api/analyze-coverage', generator_controller_1.handleAnalyzeCoverage);

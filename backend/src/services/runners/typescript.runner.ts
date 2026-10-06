@@ -57,7 +57,8 @@ export class TypeScriptRunner implements ITestRunner {
     try {
       const isTsx = /\.tsx$/i.test(filename) || /<\w+/.test(sourceCode) || /testing-library|react/i.test(testCode);
       const ext = isTsx ? 'tsx' : 'ts';
-      const cleanName = filename.replace(/\.(ts|tsx)$/i, '').replace(/-/g, '_');
+      const cleanBase = (filename || 'module').split(/[/\\]/).pop() || filename || 'module';
+      const cleanName = cleanBase.replace(/\.(ts|tsx)$/i, '').replace(/[^a-zA-Z0-9_]/g, '_') || 'module';
       const sourceFile = path.join(tempDir, `${cleanName}.${ext}`);
       const testFile = path.join(tempDir, `${cleanName}.test.${ext}`);
 
@@ -119,7 +120,7 @@ export class TypeScriptRunner implements ITestRunner {
         jestBin = 'npx jest';
       }
 
-      let cmd = `${jestBin} --config=jest.config.json --coverage --runInBand --maxWorkers=2`;
+      let cmd = `${jestBin} --config=jest.config.json --coverage --runInBand`;
       if (framework === 'Mocha') {
         cmd = 'npx nyc mocha -r ts-node/register *.test.*';
       }

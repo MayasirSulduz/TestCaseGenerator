@@ -31,7 +31,7 @@ function extractCodeFromMarkdown(text) {
             continue;
         // Filter out conversational text lines starting with bullet points (-), questions (Wait, if...), or Markdown headers (# )
         if (/^\s*-\s+/.test(line) ||
-            /^(Wait|Here|Note|In this|This test|For `|To test|\*|\#\#\#|\#\#|\#)/i.test(trimmed)) {
+            /^(Wait|Here|Note|In this|This test|For `|To test|\*|^#{1,6}\s+)/i.test(trimmed)) {
             codeLines.push(`# [Prose Filtered] ${trimmed}`);
         }
         else {
@@ -46,8 +46,12 @@ function sanitizeTestImports(testCode) {
     cleaned = cleaned.replace(/@testing-library\/jest-dom\/extend-expect/g, '@testing-library/jest-dom');
     return cleaned;
 }
-function fixPythonImports(testCode, correctModuleName) {
+function fixPythonImports(testCode, rawModuleName) {
+    const cleanBase = (rawModuleName || 'module').split(/[/\\]/).pop() || rawModuleName || 'module';
+    const correctModuleName = cleanBase.replace(/\.(py|java|js|ts|jsx|tsx)$/i, '').replace(/[^a-zA-Z0-9_]/g, '_') || 'module';
     let formatted = testCode;
+    // 0. Convert tabs to 4 spaces
+    formatted = formatted.replace(/\t/g, '    ');
     // 1. Fix function definitions with spaces in name (e.g. `def test_foo bar(` -> `def test_foo_bar(`)
     formatted = formatted.replace(/^(\s*def\s+test_[\w\s]+?)\s+(\w+)\s*\(/gm, (_match, prefix, rest) => {
         return prefix.replace(/\s+/g, '_') + '_' + rest + '(';
@@ -62,7 +66,7 @@ function fixPythonImports(testCode, correctModuleName) {
     for (const pattern of wrongPatterns) {
         formatted = formatted.replace(pattern, `from ${correctModuleName} import`);
     }
-    // Strip top-level indentation for function definitions outside of classes
+    // Strip top-level indentation for function definitions & decorators outside of classes
     const lineList = formatted.split('\n');
     let inClass = false;
     let classIndent = 0;
@@ -80,8 +84,10 @@ function fixPythonImports(testCode, correctModuleName) {
                 inClass = false;
             }
         }
-        if (!inClass && /^\s+(async\s+)?def\s+/.test(line)) {
-            lineList[i] = trimmed;
+        if (!inClass) {
+            if (/^\s+(async\s+)?def\s+test_/.test(line) || /^\s+@pytest\./.test(line)) {
+                lineList[i] = trimmed;
+            }
         }
     }
     formatted = lineList.join('\n');
@@ -89,15 +95,49 @@ function fixPythonImports(testCode, correctModuleName) {
     const hasFromStar = new RegExp(`from\\s+${correctModuleName}\\s+import`, 'i').test(formatted);
     const hasImportModule = new RegExp(`import\\s+${correctModuleName}\\b`, 'i').test(formatted);
     const importSet = new Set();
+    const mockSymbols = new Set();
     const bodyLines = [];
     for (const line of formatted.split('\n')) {
         const trimmed = line.trim();
-        if (/^(import |from \w)/.test(trimmed)) {
+        if (/^from\s+unittest\.mock\s+import\s+/.test(trimmed)) {
+            const symbols = trimmed.replace(/^from\s+unittest\.mock\s+import\s+/, '').split(',');
+            symbols.forEach(s => mockSymbols.add(s.trim()));
+        }
+        else if (/^(import |from \w)/.test(trimmed)) {
             importSet.add(trimmed);
         }
         else {
             bodyLines.push(line);
         }
+    }
+    if (mockSymbols.size > 0) {
+        const sortedMocks = Array.from(mockSymbols).sort().join(', ');
+        importSet.add(`from unittest.mock import ${sortedMocks}`);
+    }
+    // Standard library auto-imports if referenced in test code
+    if (/\bStringIO\b/.test(formatted) && !Array.from(importSet).some(i => i.includes('StringIO'))) {
+        importSet.add('from io import StringIO');
+    }
+    if (/\btime\./.test(formatted) && !Array.from(importSet).some(i => i.includes('import time'))) {
+        importSet.add('import time');
+    }
+    if (/\basyncio\b/.test(formatted) && !Array.from(importSet).some(i => i.includes('import asyncio'))) {
+        importSet.add('import asyncio');
+    }
+    if (/\bpytest\b/.test(formatted) && !Array.from(importSet).some(i => i.includes('import pytest'))) {
+        importSet.add('import pytest');
+    }
+    if (/\bos\./.test(formatted) && !Array.from(importSet).some(i => i.includes('import os'))) {
+        importSet.add('import os');
+    }
+    if (/\bsys\./.test(formatted) && !Array.from(importSet).some(i => i.includes('import sys'))) {
+        importSet.add('import sys');
+    }
+    if (/\bjson\./.test(formatted) && !Array.from(importSet).some(i => i.includes('import json'))) {
+        importSet.add('import json');
+    }
+    if (/\bre\./.test(formatted) && !Array.from(importSet).some(i => i.includes('import re'))) {
+        importSet.add('import re');
     }
     if (!hasImportModule) {
         importSet.add(`import ${correctModuleName}`);

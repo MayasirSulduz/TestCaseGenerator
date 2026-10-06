@@ -45,7 +45,8 @@ class TypeScriptRunner {
         try {
             const isTsx = /\.tsx$/i.test(filename) || /<\w+/.test(sourceCode) || /testing-library|react/i.test(testCode);
             const ext = isTsx ? 'tsx' : 'ts';
-            const cleanName = filename.replace(/\.(ts|tsx)$/i, '').replace(/-/g, '_');
+            const cleanBase = (filename || 'module').split(/[/\\]/).pop() || filename || 'module';
+            const cleanName = cleanBase.replace(/\.(ts|tsx)$/i, '').replace(/[^a-zA-Z0-9_]/g, '_') || 'module';
             const sourceFile = path_1.default.join(tempDir, `${cleanName}.${ext}`);
             const testFile = path_1.default.join(tempDir, `${cleanName}.test.${ext}`);
             fs_1.default.writeFileSync(sourceFile, sourceCode, 'utf-8');
@@ -90,7 +91,17 @@ class TypeScriptRunner {
             };
             fs_1.default.writeFileSync(path_1.default.join(tempDir, 'jest.config.json'), JSON.stringify(jestConfig, null, 2), 'utf-8');
             fs_1.default.writeFileSync(path_1.default.join(tempDir, 'package.json'), JSON.stringify({ name: 'temp-ts-test', private: true }), 'utf-8');
-            let cmd = 'npx jest --config=jest.config.json --coverage';
+            let jestBin = 'npx jest';
+            try {
+                const resolved = require.resolve('jest/bin/jest', { paths: [backendNodeModules, backendDir] });
+                if (resolved) {
+                    jestBin = `node "${resolved}"`;
+                }
+            }
+            catch {
+                jestBin = 'npx jest';
+            }
+            let cmd = `${jestBin} --config=jest.config.json --coverage --runInBand`;
             if (framework === 'Mocha') {
                 cmd = 'npx nyc mocha -r ts-node/register *.test.*';
             }

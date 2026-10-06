@@ -4,12 +4,28 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PythonRunner = void 0;
+exports.extractFailedTestIds = extractFailedTestIds;
+exports.parsePytestSummary = parsePytestSummary;
+exports.parseFullPytestOutput = parseFullPytestOutput;
 const child_process_1 = require("child_process");
 const fs_1 = __importDefault(require("fs"));
 const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
 const util_1 = require("util");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
+function printErrorContext(code, lineNumber, radius = 8) {
+    const lines = code.split('\n');
+    const start = Math.max(0, lineNumber - radius - 1);
+    const end = Math.min(lines.length, lineNumber + radius);
+    return lines
+        .slice(start, end)
+        .map((line, index) => {
+        const actualLine = start + index + 1;
+        const mark = actualLine === lineNumber ? '>>' : '  ';
+        return `${mark} ${String(actualLine).padStart(4)} | ${line}`;
+    })
+        .join('\n');
+}
 /**
  * conftest.py that auto-mocks any missing third-party imports so the source
  * module can always be imported in the sandbox — even if it uses flask,
@@ -76,11 +92,67 @@ def pytest_pyfunc_call(pyfuncitem):
 def pytest_configure(config):
     config.option.asyncio_default_fixture_loop_scope = "function"
 `;
+function extractFailedTestIds(output) {
+    const ids = new Set();
+    for (const match of output.matchAll(/^FAILED\s+([^\s]+(?:\.py::[^\s]+)?)/gm)) {
+        ids.add(match[1].trim());
+    }
+    return [...ids];
+}
+function parsePytestSummary(output) {
+    const summary = {
+        passed: 0,
+        failed: 0,
+        skipped: 0,
+        errors: 0,
+        collected: 0,
+    };
+    const collectedMatch = output.match(/collected\s+(\d+)\s+items?/i);
+    if (collectedMatch) {
+        summary.collected = Number(collectedMatch[1]);
+    }
+    const finalLine = output
+        .split('\n')
+        .find((line) => /\b(?:passed|failed|error|skipped)\b/.test(line) &&
+        /\bin\s+\d+(?:\.\d+)?s\b/.test(line));
+    if (!finalLine) {
+        const pMatch = output.match(/(\d+)\s+passed/i);
+        const fMatch = output.match(/(\d+)\s+failed/i);
+        const sMatch = output.match(/(\d+)\s+skipped/i);
+        const eMatch = output.match(/(\d+)\s+error/i);
+        if (pMatch)
+            summary.passed = Number(pMatch[1]);
+        if (fMatch)
+            summary.failed = Number(fMatch[1]);
+        if (sMatch)
+            summary.skipped = Number(sMatch[1]);
+        if (eMatch)
+            summary.errors = Number(eMatch[1]);
+        return summary;
+    }
+    const getCount = (name) => {
+        const match = finalLine.match(new RegExp(`(\\d+)\\s+${name}`, 'i'));
+        return match ? Number(match[1]) : 0;
+    };
+    summary.passed = getCount('passed');
+    summary.failed = getCount('failed');
+    summary.skipped = getCount('skipped');
+    summary.errors = getCount('error');
+    return summary;
+}
+function parseFullPytestOutput(stdout, stderr) {
+    const output = `${stdout}\n${stderr}`;
+    return {
+        failedTests: extractFailedTestIds(output),
+        summary: parsePytestSummary(output),
+    };
+}
 class PythonRunner {
-    async runCoverage(sourceCode, testCode, filename, _framework) {
+    async runCoverage(sourceCode, testCode, filename, _framework, isFinalMeasurement = false) {
         const tempDir = fs_1.default.mkdtempSync(path_1.default.join(os_1.default.tmpdir(), 'py_test_gen_'));
         try {
-            const baseName = filename.replace(/\.py$/i, '').replace(/-/g, '_');
+            const cleanBase = (filename || 'module').split(/[/\\]/).pop() || filename || 'module';
+            const baseName = cleanBase.replace(/\.py$/i, '').replace(/[^a-zA-Z0-9_]/g, '_') || 'module';
             const sourceFile = path_1.default.join(tempDir, `${baseName}.py`);
             const testFile = path_1.default.join(tempDir, `test_${baseName}.py`);
             // Write source, test, and support files
@@ -88,7 +160,7 @@ class PythonRunner {
             fs_1.default.writeFileSync(testFile, testCode, 'utf-8');
             fs_1.default.writeFileSync(path_1.default.join(tempDir, '__init__.py'), '', 'utf-8');
             fs_1.default.writeFileSync(path_1.default.join(tempDir, 'conftest.py'), CONFTEST_PY, 'utf-8');
-            // ── Pre-flight AST & Runtime Sanitization: ensure testCode has 0 syntax/collection errors ──
+            // ── Pre-flight AST & Runtime Sanitization ──
             try {
                 const sanitizeScript = `import ast, sys, traceback
 
@@ -101,6 +173,12 @@ with open(file_path, 'r', encoding='utf-8') as f:
 
 lines = code.split('\\n')
 modified = False
+
+def comment_line(l, tag="Sanitized"):
+    leading = len(l) - len(l.lstrip())
+    indent = l[:leading]
+    content = l[leading:]
+    return f"{indent}pass  # [{tag}] {content}"
 
 # Pass 0: Fix top-level function indentation & convert def -> async def if block contains await
 in_class = False
@@ -117,7 +195,6 @@ while i < len(lines):
         if curr_indent <= class_indent and stripped and not stripped.startswith('#'):
             in_class = False
     
-    # Only fix 1-3 space top-level offsets for def test_ (do NOT unindent @ decorators or inner functions!)
     if not in_class and stripped.startswith(('def test_', 'async def test_')):
         leading_spaces = len(line_str) - len(line_str.lstrip())
         if 1 <= leading_spaces <= 3:
@@ -145,58 +222,49 @@ while i < len(lines):
             modified = True
     i += 1
 
-# Pass 0.5: Convert invalid 'nonlocal' statements causing SyntaxError
 for idx in range(len(lines)):
     if 'nonlocal ' in lines[idx]:
-        lines[idx] = lines[idx].replace('nonlocal ', '# [Sanitized nonlocal] ', 1)
+        lines[idx] = comment_line(lines[idx], "nonlocal")
         modified = True
 
-# Helper function to check if a line has unmatched open brackets/parentheses
-def has_unclosed_brackets(l):
-    return (l.count('(') > l.count(')')) or (l.count('[') > l.count(']')) or (l.count('{') > l.count('}'))
-
-# Phase 1: Robust Block-Level AST Salvage (isolates and comments out failing function blocks)
 for attempt in range(200):
     try:
         ast.parse('\\n'.join(lines))
         break
     except SyntaxError as e:
         modified = True
-        err_idx = (e.lineno - 1) if (e.lineno and e.lineno <= len(lines)) else (len(lines) - 1)
+        err_idx = (e.lineno - 1) if (e.lineno and 1 <= e.lineno <= len(lines)) else (len(lines) - 1)
 
-        # Find starting line of enclosing top-level function/class/fixture block
         func_start = err_idx
         while func_start > 0:
             l_str = lines[func_start]
             l_strip = l_str.strip()
             if (len(l_str) - len(l_str.lstrip()) == 0) and (
-                l_strip.startswith(('def ', 'async def ', 'class ')) or
-                (l_strip.startswith('@') and func_start + 1 < len(lines) and lines[func_start + 1].strip().startswith(('def ', 'async def ')))
+                l_strip.startswith(('def ', 'async def ', 'class ')) or l_strip.startswith('@')
             ):
                 break
             func_start -= 1
 
-        # Find ending line of func_start (up to next top-level function/class/decorator or EOF)
         func_end = func_start + 1
         while func_end < len(lines):
             l_str = lines[func_end]
             l_strip = l_str.strip()
             if l_strip and not l_strip.startswith('#'):
-                if (len(l_str) - len(l_str.lstrip()) == 0) and l_strip.startswith(('def ', 'async def ', 'class ', '@')):
+                if (len(l_str) - len(l_str.lstrip()) == 0) and (
+                    l_strip.startswith(('def ', 'async def ', 'class ')) or l_strip.startswith('@')
+                ):
                     break
             func_end += 1
 
-        # Comment out the entire failing function block
+        changed_any = False
         for k in range(func_start, func_end):
             if lines[k].strip() and not lines[k].strip().startswith('#'):
-                lines[k] = f"# [Sanitized Failing Block] {lines[k]}"
+                lines[k] = comment_line(lines[k], "Failing Block")
+                changed_any = True
 
-# Phase 1.5: Guaranteed line-level salvage. Block-level commenting alone can give up
-# on files with many broken blocks (it caps out and would silently leave the file
-# unparseable). This loop is GUARANTEED to converge: every pass either succeeds or
-# comments out exactly one offending line, so it terminates for any finite file and
-# ends with code that ast.parse() accepts. Broken model artifacts such as
-# 'pass  # [Indentation Fixed]' lines at wrong indent levels are neutralized here.
+        if not changed_any and 0 <= err_idx < len(lines):
+            lines[err_idx] = comment_line(lines[err_idx], "Line Salvage")
+
 guard = 0
 while guard < 10000:
     try:
@@ -206,14 +274,10 @@ while guard < 10000:
         err_idx = (e.lineno - 1) if (e.lineno and 1 <= e.lineno <= len(lines)) else -1
         if not (0 <= err_idx < len(lines)):
             break
-        target = lines[err_idx].strip()
-        if not target or target.startswith('#'):
-            break
         modified = True
-        lines[err_idx] = f"# [Sanitized] {lines[err_idx]}"
+        lines[err_idx] = comment_line(lines[err_idx], "Sanitized")
         guard += 1
 
-# Phase 2: Runtime module exec check (comment out top-level lines causing NameError/AttributeError)
 for attempt in range(20):
     current_code = '\\n'.join(lines)
     try:
@@ -231,15 +295,11 @@ for attempt in range(20):
                 break
         if err_line and err_line <= len(lines):
             modified = True
-            lines[err_line - 1] = f'# [Sanitized] {lines[err_line - 1]}'
+            lines[err_line - 1] = comment_line(lines[err_line - 1], "Sanitized")
         else:
             break
 
-# Final safety gate: never hand a broken file to pytest. Re-run the guaranteed
-# line-level scrub one last time so we can be certain ast.parse() succeeds.
 if modified:
-    # The final scrub is a bounded safety net: Phase 1.5 already guarantees a
-    # parseable file, so this normally exits on the very first successful parse.
     guard = 0
     while guard < 10000:
         try:
@@ -252,7 +312,7 @@ if modified:
             target = lines[err_idx].strip()
             if not target or target.startswith('#'):
                 break
-            lines[err_idx] = f"# [Sanitized] {lines[err_idx]}"
+            lines[err_idx] = comment_line(lines[err_idx], "Sanitized")
             guard += 1
 
     cleaned = '\\n'.join(lines)
@@ -271,18 +331,36 @@ if modified:
             catch (astErr) {
                 console.log(`  [PythonRunner] AST sanitization warning: ${astErr?.message || astErr}`);
             }
+            // Fast-fail AST check: verify test code is valid Python before running Pytest
+            try {
+                await execAsync(`python3 -c "import ast; ast.parse(open('test_${baseName}.py', encoding='utf-8').read())"`, { cwd: tempDir, timeout: 10000 });
+            }
+            catch (syntaxErr) {
+                const syntaxMsg = syntaxErr.stderr || syntaxErr.stdout || syntaxErr.message || 'SyntaxError during Python AST parse';
+                console.log(`  [PythonRunner] ❌ Fast-fail: Generated test code has AST syntax errors. Skipping Pytest execution.`);
+                return {
+                    success: false,
+                    coverage: 0,
+                    test_passed: false,
+                    error: `AST SyntaxError: Generated test file is not valid Python. Traceback:\n${syntaxMsg}`,
+                    stdout: syntaxMsg,
+                    stderr: syntaxMsg,
+                    collectionError: true
+                };
+            }
             // ── Pre-flight: check if the source module can be imported ──
             try {
-                const importCheck = await execAsync(`python3 -c "import sys; sys.path.insert(0,'.'); import ${baseName}"`, { cwd: tempDir, timeout: 15000 });
+                await execAsync(`python3 -c "import sys; sys.path.insert(0,'.'); import ${baseName}"`, { cwd: tempDir, timeout: 15000, env: { ...process.env, PYTHONPATH: tempDir } });
                 console.log(`  [PythonRunner] Source module '${baseName}' imported OK`);
             }
             catch (importErr) {
                 const importErrMsg = (importErr.stderr || importErr.stdout || '').slice(0, 300);
                 console.log(`  [PythonRunner] Source module import warning: ${importErrMsg}`);
-                // Continue anyway — conftest.py should handle missing deps
             }
-            // ── Run pytest with coverage ──
-            const cmd = `python3 -m pytest test_${baseName}.py --cov=${baseName} --cov-report=term-missing -v --tb=short`;
+            // Write pytest.ini to eliminate deprecation warnings and configure asyncio mode
+            fs_1.default.writeFileSync(path_1.default.join(tempDir, 'pytest.ini'), `[pytest]\nasyncio_mode = auto\nasyncio_default_fixture_loop_scope = function\n`, 'utf-8');
+            // ── Run pytest with json & term coverage ──
+            const cmd = `python3 -m pytest test_${baseName}.py -q --tb=short -rA --disable-warnings --cov=${baseName} --cov-report=json:coverage.json --cov-report=term-missing`;
             let stdout = '';
             let stderr = '';
             let testPassed = true;
@@ -291,77 +369,103 @@ if modified:
                     cwd: tempDir,
                     timeout: 90000, // 90s for large files
                     maxBuffer: 10 * 1024 * 1024, // 10MB
-                    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }
+                    env: { ...process.env, PYTHONPATH: tempDir, PYTHONDONTWRITEBYTECODE: '1' }
                 });
                 stdout = result.stdout;
                 stderr = result.stderr;
+                testPassed = true;
             }
             catch (err) {
                 testPassed = false;
                 stdout = err.stdout || '';
                 stderr = err.stderr || '';
             }
-            const combinedOutput = stdout + '\n' + stderr;
-            console.log(`  [PythonRunner] stdout length: ${stdout.length}, stderr length: ${stderr.length}`);
-            console.log(`  [PythonRunner] test_passed: ${testPassed}`);
-            // ── Parse coverage output ──
-            const covMatch = combinedOutput.match(new RegExp(`${baseName}\\.py\\s+\\d+\\s+\\d+\\s+(\\d+)%\\s*(.*)`)) || combinedOutput.match(/TOTAL\s+\d+\s+\d+\s+(\d+)%/);
-            if (covMatch) {
-                const coverage = parseInt(covMatch[1], 10);
-                const missingLines = covMatch[2]?.trim() || 'None';
-                const lines = combinedOutput.split('\n');
-                const tableLines = [];
-                let capturing = false;
-                for (const line of lines) {
-                    if (line.includes('Name') && line.includes('Stmts') && line.includes('Cover')) {
-                        capturing = true;
+            const parsedEvidence = parseFullPytestOutput(stdout, stderr);
+            const failedTestIds = parsedEvidence.failedTests;
+            const summary = parsedEvidence.summary;
+            const executedCount = summary.passed + summary.failed + summary.skipped + summary.errors;
+            const passRate = executedCount === 0 ? 0 : (summary.passed / executedCount) * 100;
+            const isCollectionError = /ERROR collecting|ImportError|SyntaxError|ModuleNotFoundError/i.test(`${stdout}\n${stderr}`);
+            console.log(`  [PythonRunner] Pytest exit code: ${testPassed ? 0 : 1}`);
+            console.log(`  [PythonRunner] Metrics | Collected: ${summary.collected} | Executed: ${executedCount} | Passed: ${summary.passed} | Failed: ${summary.failed} | Pass Rate: ${passRate.toFixed(1)}%`);
+            console.log(`  [PythonRunner] Failed test IDs (${failedTestIds.length}): ${failedTestIds.join(', ') || 'none'}`);
+            if (!testPassed) {
+                console.log(`---- pytest stdout ----`);
+                console.log(stdout.length > 4000 ? '... [truncated top] ...\n' + stdout.slice(-4000) : stdout);
+                console.log(`---- pytest stderr ----`);
+                console.log(stderr.length > 2000 ? stderr.slice(-2000) : stderr);
+            }
+            // ── Parse machine-readable coverage.json report if available ──
+            const jsonCovPath = path_1.default.join(tempDir, 'coverage.json');
+            let jsonCoverage = null;
+            let jsonMissingLines = 'None';
+            let jsonReportFound = false;
+            if (fs_1.default.existsSync(jsonCovPath)) {
+                try {
+                    const covJson = JSON.parse(fs_1.default.readFileSync(jsonCovPath, 'utf-8'));
+                    const totalPct = covJson.totals?.percent_covered;
+                    if (typeof totalPct === 'number') {
+                        jsonCoverage = Math.round(totalPct);
+                        jsonReportFound = true;
                     }
-                    if (capturing) {
-                        tableLines.push(line);
-                        if (line.includes('TOTAL') || line.includes('===')) {
-                            if (tableLines.length > 2)
-                                break;
+                    const filesMap = covJson.files || {};
+                    const matchedFileKey = Object.keys(filesMap).find(f => f.endsWith(`${baseName}.py`) || f === `${baseName}.py`);
+                    if (matchedFileKey && filesMap[matchedFileKey]?.missing_lines) {
+                        const missingArr = filesMap[matchedFileKey].missing_lines;
+                        if (Array.isArray(missingArr) && missingArr.length > 0) {
+                            jsonMissingLines = missingArr.join(', ');
                         }
                     }
                 }
-                return {
-                    success: true,
-                    coverage,
-                    missing_lines: missingLines.length ? missingLines : 'None',
-                    coverage_table: tableLines.length ? tableLines.join('\n') : combinedOutput.slice(0, 500),
-                    test_passed: testPassed,
-                    stdout,
-                    stderr
-                };
+                catch { }
             }
-            // ── No coverage found — extract useful error info ──
-            // Try to find passed/failed counts
-            const passedMatch = combinedOutput.match(/(\d+) passed/);
-            const failedMatch = combinedOutput.match(/(\d+) failed/);
-            const errorMatch = combinedOutput.match(/(\d+) error/);
-            let statusSummary = '';
-            if (passedMatch)
-                statusSummary += `${passedMatch[1]} passed `;
-            if (failedMatch)
-                statusSummary += `${failedMatch[1]} failed `;
-            if (errorMatch)
-                statusSummary += `${errorMatch[1]} errors `;
+            // ── Fallback term coverage parsing ──
+            const combinedOutput = stdout + '\n' + stderr;
+            const covMatch = combinedOutput.match(new RegExp(`${baseName}\\.py\\s+\\d+\\s+\\d+\\s+(\\d+)%\\s*(.*)`)) || combinedOutput.match(/TOTAL\s+\d+\s+\d+\s+(\d+)%/);
+            const coverage = jsonReportFound
+                ? (jsonCoverage ?? 0)
+                : (covMatch ? parseInt(covMatch[1], 10) : 0);
+            const missingLines = jsonReportFound ? jsonMissingLines : (covMatch?.[2]?.trim() || 'None');
+            const lines = combinedOutput.split('\n');
+            const tableLines = [];
+            let capturing = false;
+            for (const line of lines) {
+                if (line.includes('Name') && line.includes('Stmts') && line.includes('Cover')) {
+                    capturing = true;
+                }
+                if (capturing) {
+                    tableLines.push(line);
+                    if (line.includes('TOTAL') || line.includes('===')) {
+                        if (tableLines.length > 2)
+                            break;
+                    }
+                }
+            }
             return {
-                success: false,
-                coverage: 0,
-                test_passed: false,
-                error: statusSummary
-                    ? `Tests: ${statusSummary.trim()}. Coverage parsing failed.`
-                    : 'Failed to parse pytest coverage output.',
-                stdout: combinedOutput.slice(0, 4000),
-                stderr: combinedOutput.slice(0, 4000)
+                success: !isCollectionError,
+                coverage,
+                missing_lines: missingLines,
+                coverage_table: tableLines.length ? tableLines.join('\n') : combinedOutput.slice(0, 500),
+                test_passed: testPassed,
+                stdout,
+                stderr,
+                failedTests: failedTestIds,
+                failedCount: summary.failed,
+                passedTests: summary.passed,
+                skippedCount: summary.skipped,
+                errorCount: summary.errors,
+                collectedCount: summary.collected,
+                executedCount,
+                passRate,
+                collectionError: isCollectionError
             };
         }
         catch (error) {
             return {
                 success: false,
                 coverage: 0,
-                error: error?.message || 'Python runner execution error'
+                error: error?.message || 'Python runner execution error',
+                collectionError: true
             };
         }
         finally {

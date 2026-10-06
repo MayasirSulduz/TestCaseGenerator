@@ -169,7 +169,8 @@ export class PythonRunner implements ITestRunner {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'py_test_gen_'));
 
     try {
-      const baseName = filename.replace(/\.py$/i, '').replace(/-/g, '_');
+      const cleanBase = (filename || 'module').split(/[/\\]/).pop() || filename || 'module';
+      const baseName = cleanBase.replace(/\.py$/i, '').replace(/[^a-zA-Z0-9_]/g, '_') || 'module';
       const sourceFile = path.join(tempDir, `${baseName}.py`);
       const testFile = path.join(tempDir, `test_${baseName}.py`);
 

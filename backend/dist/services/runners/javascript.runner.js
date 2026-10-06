@@ -45,7 +45,8 @@ class JavaScriptRunner {
         try {
             const isJsx = /\.jsx$/i.test(filename) || /<\w+/.test(sourceCode) || /testing-library|react/i.test(testCode);
             const ext = isJsx ? 'jsx' : 'js';
-            const cleanName = filename.replace(/\.(js|jsx)$/i, '').replace(/-/g, '_');
+            const cleanBase = (filename || 'module').split(/[/\\]/).pop() || filename || 'module';
+            const cleanName = cleanBase.replace(/\.(js|jsx)$/i, '').replace(/[^a-zA-Z0-9_]/g, '_') || 'module';
             const sourceFile = path_1.default.join(tempDir, `${cleanName}.${ext}`);
             const testFile = path_1.default.join(tempDir, `${cleanName}.test.${ext}`);
             fs_1.default.writeFileSync(sourceFile, sourceCode, 'utf-8');
@@ -61,7 +62,30 @@ class JavaScriptRunner {
                 private: true
             };
             fs_1.default.writeFileSync(path_1.default.join(tempDir, 'package.json'), JSON.stringify(pkgJson, null, 2), 'utf-8');
+            let tsJestPath = 'ts-jest';
+            try {
+                tsJestPath = require.resolve('ts-jest', { paths: [backendNodeModules, backendDir] });
+            }
+            catch {
+                tsJestPath = 'ts-jest';
+            }
+            const tsConfig = {
+                compilerOptions: {
+                    target: 'es2020',
+                    module: 'commonjs',
+                    jsx: 'react-jsx',
+                    allowJs: true,
+                    strict: false,
+                    esModuleInterop: true,
+                    skipLibCheck: true,
+                    types: ['jest', 'node', '@testing-library/jest-dom']
+                }
+            };
+            fs_1.default.writeFileSync(path_1.default.join(tempDir, 'tsconfig.json'), JSON.stringify(tsConfig, null, 2), 'utf-8');
             const jestConfig = {
+                transform: {
+                    '^.+\\.(ts|tsx|js|jsx)$': [tsJestPath, { diagnostics: false, tsconfig: path_1.default.join(tempDir, 'tsconfig.json') }]
+                },
                 testEnvironment: isJsx ? 'jsdom' : 'node',
                 collectCoverage: true,
                 moduleNameMapper: {
@@ -70,7 +94,17 @@ class JavaScriptRunner {
                 moduleDirectories: ['node_modules', tempDir, backendNodeModules]
             };
             fs_1.default.writeFileSync(path_1.default.join(tempDir, 'jest.config.json'), JSON.stringify(jestConfig, null, 2), 'utf-8');
-            let cmd = 'npx jest --config=jest.config.json --coverage';
+            let jestBin = 'npx jest';
+            try {
+                const resolved = require.resolve('jest/bin/jest', { paths: [backendNodeModules, backendDir] });
+                if (resolved) {
+                    jestBin = `node "${resolved}"`;
+                }
+            }
+            catch {
+                jestBin = 'npx jest';
+            }
+            let cmd = `${jestBin} --config=jest.config.json --coverage --runInBand`;
             if (framework === 'Mocha') {
                 cmd = 'npx nyc mocha *.test.js';
             }

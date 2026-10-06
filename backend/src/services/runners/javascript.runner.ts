@@ -57,7 +57,8 @@ export class JavaScriptRunner implements ITestRunner {
     try {
       const isJsx = /\.jsx$/i.test(filename) || /<\w+/.test(sourceCode) || /testing-library|react/i.test(testCode);
       const ext = isJsx ? 'jsx' : 'js';
-      const cleanName = filename.replace(/\.(js|jsx)$/i, '').replace(/-/g, '_');
+      const cleanBase = (filename || 'module').split(/[/\\]/).pop() || filename || 'module';
+      const cleanName = cleanBase.replace(/\.(js|jsx)$/i, '').replace(/[^a-zA-Z0-9_]/g, '_') || 'module';
       const sourceFile = path.join(tempDir, `${cleanName}.${ext}`);
       const testFile = path.join(tempDir, `${cleanName}.test.${ext}`);
 
@@ -123,7 +124,7 @@ export class JavaScriptRunner implements ITestRunner {
         jestBin = 'npx jest';
       }
 
-      let cmd = `${jestBin} --config=jest.config.json --coverage --runInBand --maxWorkers=2`;
+      let cmd = `${jestBin} --config=jest.config.json --coverage --runInBand`;
       if (framework === 'Mocha') {
         cmd = 'npx nyc mocha *.test.js';
       }

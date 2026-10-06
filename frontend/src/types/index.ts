@@ -5,6 +5,14 @@ export interface TrialStep {
   note: string;
 }
 
+export interface ProjectTestFile {
+  filename: string;
+  filepath: string;
+  content: string;
+  coverage?: number;
+  isFixture?: boolean;
+}
+
 export interface CoverageReport {
   totalCoverage: number;
   runCommand: string;
@@ -14,6 +22,7 @@ export interface CoverageReport {
   testPassed?: boolean;
   executionTimeSec?: string;
   trials?: TrialStep[];
+  projectTestFiles?: ProjectTestFile[];
 }
 
 export interface FrameworkDetectionResult {
@@ -62,6 +71,7 @@ export interface CodeViewerProps {
   missingLines?: string;
   coverage?: number;
   onGenerateTargetedLines?: (targetLines: string) => void;
+  projectTestFiles?: ProjectTestFile[];
 }
 
 export interface FileUploadProps {

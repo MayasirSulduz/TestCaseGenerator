@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.handleGenerateTests = handleGenerateTests;
+exports.handleGenerateTestsStream = handleGenerateTestsStream;
 exports.handleDetectFramework = handleDetectFramework;
 exports.handleFixTests = handleFixTests;
 exports.handleAnalyzeCoverage = handleAnalyzeCoverage;
@@ -31,6 +32,38 @@ async function handleGenerateTests(req, res) {
             status: 'error',
             message: error?.message || 'Internal Server Error'
         });
+    }
+}
+async function handleGenerateTestsStream(req, res) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    const sendEvent = (event, data) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    try {
+        const dto = req.body || {};
+        if (!dto.code || !dto.code.trim()) {
+            sendEvent('error', { message: 'No source code provided' });
+            res.end();
+            return;
+        }
+        const onLog = (tag, text) => {
+            sendEvent('log', { tag, text });
+        };
+        const onTrial = (trial) => {
+            sendEvent('trial', trial);
+        };
+        const result = await (0, generator_service_1.generateTestsWithCoverage)(dto, onLog, onTrial);
+        sendEvent('done', result);
+        sendEvent('result', result);
+        res.end();
+    }
+    catch (error) {
+        console.error('Error in handleGenerateTestsStream:', error);
+        sendEvent('error', { message: error?.message || 'Internal Server Error' });
+        res.end();
     }
 }
 function handleDetectFramework(req, res) {

@@ -4,7 +4,8 @@ import {
   CoverageReportDTO,
   CoverageResult,
   GenerateTestsRequestDTO,
-  GenerateTestsResponseDTO
+  GenerateTestsResponseDTO,
+  ProjectTestFile
 } from '../types';
 import { extractCodeFromMarkdown, fixPythonImports, sanitizeTestImports } from '../utils/codeParser';
 import { chunkCode, mergeTestChunks, shouldChunk } from './chunker.service';
@@ -105,7 +106,8 @@ function buildRepairPrompt(
   framework: string,
   filename: string
 ): string {
-  const moduleName = filename.replace(/\.(py|java|js|ts|jsx|tsx)$/i, '').replace(/-/g, '_');
+  const cleanBase = (filename || 'module').split(/[/\\]/).pop() || filename || 'module';
+  const moduleName = cleanBase.replace(/\.(py|java|js|ts|jsx|tsx)$/i, '').replace(/[^a-zA-Z0-9_]/g, '_') || 'module';
   const safeErr = (errOutput || '').length > 3000 ? (errOutput || '').slice(-3000) : (errOutput || '');
   const safeSource = truncateCodeForPrompt(sourceCode, 350);
 
@@ -608,9 +610,10 @@ export async function generateTestsWithCoverage(
   emitLog('INFRA', `Initializing local test runner sandbox for ${language}...`);
   emitLog('TEST', `Target source file: ${filename} | Framework: ${framework} | Goal: ${coverageTarget}%`);
 
-  const moduleName = filename
+  const cleanBase = (filename || 'module').split(/[/\\]/).pop() || filename || 'module';
+  const moduleName = cleanBase
     .replace(/\.(py|java|js|ts|jsx|tsx)$/i, '')
-    .replace(/-/g, '_');
+    .replace(/[^a-zA-Z0-9_]/g, '_') || 'module';
 
   // ── Step 1: Generate initial tests (chunked or single-shot) ─────────────
 
@@ -719,9 +722,9 @@ export async function generateTestsWithCoverage(
         console.log(`  ── End Output Summary ──\n`);
       }
 
-      if (!request.targetMissingLines && currentCoverage >= coverageTarget) {
-        console.log(`✓ Target coverage ${coverageTarget}% achieved in Trial #${iteration} (${currentCoverage}% Covered)! Stopping further iterations.`);
-        emitLog('AUTO-REPAIR', `✓ Target coverage ${coverageTarget}% achieved (${currentCoverage}% Covered) in Trial #${iteration}! Stopping further iterations.`);
+      if (!request.targetMissingLines && currentCoverage >= coverageTarget && testPassed) {
+        console.log(`✓ Target coverage ${coverageTarget}% achieved and all tests passed in Trial #${iteration} (${currentCoverage}% Covered)! Stopping further iterations.`);
+        emitLog('AUTO-REPAIR', `✓ Target coverage ${coverageTarget}% achieved and all tests passed (${currentCoverage}% Covered) in Trial #${iteration}!`);
         break;
       }
 
@@ -950,6 +953,25 @@ export async function generateTestsWithCoverage(
       : `Iteration ${lastIdx + 1}/${iterationHistory.length}: Max trials reached -> ${iterationHistory[lastIdx].coverage}% Covered (Goal: ${coverageTarget}%)`;
   }
 
+  const projectTestFiles: ProjectTestFile[] = [
+    {
+      filename: language === 'Python' ? 'conftest.py' : 'setupTests.js',
+      filepath: language === 'Python' ? 'conftest.py' : 'setupTests.js',
+      content: language === 'Python'
+        ? `# conftest.py — Shared Pytest Fixtures & Mocks\nimport pytest\nfrom unittest.mock import MagicMock\n\n@pytest.fixture(autouse=True)\ndef mock_db_session():\n    session = MagicMock()\n    return session\n`
+        : `// setupTests.js — Shared Mocks & Global Setup\nglobal.fetch = jest.fn(() => Promise.resolve({ json: () => Promise.resolve({}) }));\n`,
+      isFixture: true,
+      coverage: 100
+    },
+    {
+      filename: language === 'Python' ? `test_${moduleName}.py` : `${moduleName}.test.js`,
+      filepath: language === 'Python' ? `test_${moduleName}.py` : `${moduleName}.test.js`,
+      content: lastKnownGoodTestCode.trim(),
+      coverage: finalCoverage,
+      isFixture: false
+    }
+  ];
+
   const coverageReport: CoverageReportDTO = {
     totalCoverage: finalCoverage,
     runCommand,
@@ -958,7 +980,8 @@ export async function generateTestsWithCoverage(
     suggestions: generateSuggestions(finalCoverage, coverageTarget, finalTestPassed),
     testPassed: finalTestPassed,
     executionTimeSec,
-    trials: iterationHistory
+    trials: iterationHistory,
+    projectTestFiles
   };
 
   return {

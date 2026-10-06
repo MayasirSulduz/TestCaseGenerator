@@ -48,7 +48,10 @@ export function sanitizeTestImports(testCode: string): string {
   return cleaned;
 }
 
-export function fixPythonImports(testCode: string, correctModuleName: string): string {
+export function fixPythonImports(testCode: string, rawModuleName: string): string {
+  const cleanBase = (rawModuleName || 'module').split(/[/\\]/).pop() || rawModuleName || 'module';
+  const correctModuleName = cleanBase.replace(/\.(py|java|js|ts|jsx|tsx)$/i, '').replace(/[^a-zA-Z0-9_]/g, '_') || 'module';
+
   let formatted = testCode;
 
   // 0. Convert tabs to 4 spaces
@@ -123,6 +126,32 @@ export function fixPythonImports(testCode: string, correctModuleName: string): s
   if (mockSymbols.size > 0) {
     const sortedMocks = Array.from(mockSymbols).sort().join(', ');
     importSet.add(`from unittest.mock import ${sortedMocks}`);
+  }
+
+  // Standard library auto-imports if referenced in test code
+  if (/\bStringIO\b/.test(formatted) && !Array.from(importSet).some(i => i.includes('StringIO'))) {
+    importSet.add('from io import StringIO');
+  }
+  if (/\btime\./.test(formatted) && !Array.from(importSet).some(i => i.includes('import time'))) {
+    importSet.add('import time');
+  }
+  if (/\basyncio\b/.test(formatted) && !Array.from(importSet).some(i => i.includes('import asyncio'))) {
+    importSet.add('import asyncio');
+  }
+  if (/\bpytest\b/.test(formatted) && !Array.from(importSet).some(i => i.includes('import pytest'))) {
+    importSet.add('import pytest');
+  }
+  if (/\bos\./.test(formatted) && !Array.from(importSet).some(i => i.includes('import os'))) {
+    importSet.add('import os');
+  }
+  if (/\bsys\./.test(formatted) && !Array.from(importSet).some(i => i.includes('import sys'))) {
+    importSet.add('import sys');
+  }
+  if (/\bjson\./.test(formatted) && !Array.from(importSet).some(i => i.includes('import json'))) {
+    importSet.add('import json');
+  }
+  if (/\bre\./.test(formatted) && !Array.from(importSet).some(i => i.includes('import re'))) {
+    importSet.add('import re');
   }
 
   if (!hasImportModule) {
