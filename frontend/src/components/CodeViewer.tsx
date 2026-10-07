@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, CheckCircle2, Code2, Copy, Download, RefreshCw, Sparkles, Terminal, Zap, FileCode, Layers, ShieldCheck, Flame, CheckSquare, Square, Target, FolderTree, Package } from 'lucide-react';
+import JSZip from 'jszip';
 import { CodeViewerProps } from '../types';
 import { downloadFile, getTestFileName } from '../utils/fileHelpers';
 
@@ -14,7 +15,8 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
   missingLines,
   coverage = 0,
   onGenerateTargetedLines,
-  projectTestFiles = []
+  projectTestFiles = [],
+  isZipUpload = false
 }) => {
   const [activeTab, setActiveTab] = useState<'tests' | 'heatmap'>('tests');
   const [copied, setCopied] = useState<boolean>(false);
@@ -138,7 +140,7 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
       return;
     }
 
-    if (targetCode.startsWith('// Real-time')) {
+    if (targetCode.startsWith('// Real-time') || isZipUpload) {
       setDisplayedCode(targetCode);
       setIsTyping(false);
       return;
@@ -166,7 +168,7 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
     }, 16);
 
     return () => clearInterval(interval);
-  }, [activeCodeString]);
+  }, [activeCodeString, isZipUpload]);
 
   const lineNumbers = useMemo(() => {
     const activeText = displayedCode || activeCodeString || '';
@@ -200,9 +202,34 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
     }
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (activeTab === 'heatmap') {
       downloadFile(sourceCode || '', fileName || 'source_file');
+    } else if (isZipUpload || (projectTestFiles && projectTestFiles.length > 0)) {
+      try {
+        const zip = new JSZip();
+        const testsFolder = zip.folder('tests') || zip;
+
+        if (projectTestFiles && projectTestFiles.length > 0) {
+          projectTestFiles.forEach((file) => {
+            testsFolder.file(file.filename, file.content);
+          });
+        } else {
+          testsFolder.file(activeDisplayFileName, activeCodeString);
+        }
+
+        const content = await zip.generateAsync({ type: 'blob' });
+        const url = URL.createObjectURL(content);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'tests.zip';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        downloadFile(activeCodeString, activeDisplayFileName);
+      }
     } else {
       downloadFile(activeCodeString, activeDisplayFileName);
     }
@@ -230,7 +257,7 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
               <span>Generated Unit Tests</span>
             </button>
 
-            {sourceCode && (
+            {sourceCode && !isZipUpload && (
               <button
                 onClick={() => setActiveTab('heatmap')}
                 className={`px-3 py-1 rounded-lg text-[11px] font-bold font-mono transition-all flex items-center gap-1.5 ${

@@ -355,10 +355,14 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
             isFixture: false
           });
 
-          if (accumulatedFiles.length === 2) {
+          if (!generatedTests && result.tests) {
             setGeneratedTests(result.tests);
           }
         }
+      }
+
+      if (accumulatedFiles.length > 1 && accumulatedFiles[1].content) {
+        setGeneratedTests(accumulatedFiles[1].content);
       }
 
       clearInterval(timerInterval);
@@ -566,7 +570,7 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
             </div>
           )}
 
-          {generatedTests || loading ? (
+          {generatedTests || coverageReport || loading ? (
             /* 4-PANEL DASHBOARD (60% / 40% height split for top & bottom rows; no outer page scroll) */
             <div className="flex flex-col gap-5 w-full lg:h-[calc(100vh-140px)]">
               {/* TOP ROW: 60% HEIGHT (70% CodeViewer / 30% CoverageGauge) */}
@@ -584,6 +588,7 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
                     coverage={coverageReport?.totalCoverage}
                     onGenerateTargetedLines={handleGenerateTargetedLines}
                     projectTestFiles={coverageReport?.projectTestFiles}
+                    isZipUpload={zipEntries.length > 0}
                   />
                 </div>
 

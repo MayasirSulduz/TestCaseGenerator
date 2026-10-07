@@ -72,6 +72,7 @@ export interface CodeViewerProps {
   coverage?: number;
   onGenerateTargetedLines?: (targetLines: string) => void;
   projectTestFiles?: ProjectTestFile[];
+  isZipUpload?: boolean;
 }
 
 export interface FileUploadProps {
