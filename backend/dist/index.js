@@ -5,6 +5,12 @@ const env_config_1 = require("./config/env.config");
 const systemEnv_1 = require("./utils/systemEnv");
 const app = (0, app_1.createApp)();
 const port = env_config_1.envConfig.port;
+process.on('uncaughtException', (err) => {
+    console.error('⚠️ [SERVER SURVIVAL] Caught uncaughtException:', err?.message || err);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('⚠️ [SERVER SURVIVAL] Caught unhandledRejection:', reason);
+});
 if (!process.env.VERCEL) {
     console.log('\n' + '='.repeat(60));
     console.log('Node.js TypeScript Server Starting - Multi-Language Test Generator');
@@ -22,8 +28,10 @@ if (!process.env.VERCEL) {
     console.log(`   Maven: ${env.mvn ? '✓' : '✗'}`);
     console.log('\nSupported Languages: Python, JavaScript, TypeScript, Java');
     console.log('='.repeat(60) + '\n');
-    app.listen(port, () => {
+    const server = app.listen(port, () => {
         console.log(`🚀 Server successfully listening on http://localhost:${port}`);
     });
+    server.keepAliveTimeout = 120000;
+    server.headersTimeout = 125000;
 }
 exports.default = app;

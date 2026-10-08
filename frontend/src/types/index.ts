@@ -73,6 +73,8 @@ export interface CodeViewerProps {
   onGenerateTargetedLines?: (targetLines: string) => void;
   projectTestFiles?: ProjectTestFile[];
   isZipUpload?: boolean;
+  selectedFileIdx?: number;
+  onSelectFileIdx?: (idx: number) => void;
 }
 
 export interface FileUploadProps {

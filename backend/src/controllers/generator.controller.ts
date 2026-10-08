@@ -36,12 +36,33 @@ export async function handleGenerateTests(req: Request, res: Response): Promise<
 
 export async function handleGenerateTestsStream(req: Request, res: Response): Promise<void> {
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
 
+  let isClientConnected = true;
+  req.on('close', () => {
+    isClientConnected = false;
+  });
+
+  const heartbeatInterval = setInterval(() => {
+    if (!isClientConnected || res.writableEnded || res.destroyed) {
+      clearInterval(heartbeatInterval);
+      return;
+    }
+    try {
+      res.write(': heartbeat\n\n');
+    } catch {}
+  }, 15000);
+
   const sendEvent = (event: string, data: any) => {
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    if (!isClientConnected || res.writableEnded || res.destroyed) return;
+    try {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    } catch (e) {
+      console.error('SSE sendEvent error:', e);
+    }
   };
 
   try {
@@ -49,7 +70,8 @@ export async function handleGenerateTestsStream(req: Request, res: Response): Pr
 
     if (!dto.code || !dto.code.trim()) {
       sendEvent('error', { message: 'No source code provided' });
-      res.end();
+      clearInterval(heartbeatInterval);
+      if (!res.writableEnded) res.end();
       return;
     }
 
@@ -65,11 +87,13 @@ export async function handleGenerateTestsStream(req: Request, res: Response): Pr
 
     sendEvent('done', result);
     sendEvent('result', result);
-    res.end();
+    clearInterval(heartbeatInterval);
+    if (!res.writableEnded) res.end();
   } catch (error: any) {
     console.error('Error in handleGenerateTestsStream:', error);
     sendEvent('error', { message: error?.message || 'Internal Server Error' });
-    res.end();
+    clearInterval(heartbeatInterval);
+    if (!res.writableEnded) res.end();
   }
 }
 

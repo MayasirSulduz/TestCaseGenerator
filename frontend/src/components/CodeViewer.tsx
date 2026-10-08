@@ -16,33 +16,44 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
   coverage = 0,
   onGenerateTargetedLines,
   projectTestFiles = [],
-  isZipUpload = false
+  isZipUpload = false,
+  selectedFileIdx,
+  onSelectFileIdx
 }) => {
   const [activeTab, setActiveTab] = useState<'tests' | 'heatmap'>('tests');
   const [copied, setCopied] = useState<boolean>(false);
   const [displayedCode, setDisplayedCode] = useState<string>('');
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [selectedLines, setSelectedLines] = useState<Set<number>>(new Set());
-  const [selectedTestFileIdx, setSelectedTestFileIdx] = useState<number>(1); // Default to test file over fixture
+  const [selectedTestFileIdx, setSelectedTestFileIdx] = useState<number>(0);
+
+  const effectiveSelectedIdx = selectedFileIdx !== undefined ? selectedFileIdx : selectedTestFileIdx;
+
+  const handleSelectFile = (idx: number) => {
+    setSelectedTestFileIdx(idx);
+    if (onSelectFileIdx) {
+      onSelectFileIdx(idx);
+    }
+  };
 
   const codeContainerRef = useRef<HTMLDivElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
 
   // Active code string based on selected test file in multi-file project tree
   const activeCodeString = useMemo(() => {
-    if (projectTestFiles && projectTestFiles.length > 0 && selectedTestFileIdx < projectTestFiles.length) {
-      return projectTestFiles[selectedTestFileIdx].content;
+    if (projectTestFiles && projectTestFiles.length > 0 && effectiveSelectedIdx < projectTestFiles.length) {
+      return projectTestFiles[effectiveSelectedIdx].content;
     }
     return code;
-  }, [code, projectTestFiles, selectedTestFileIdx]);
+  }, [code, projectTestFiles, effectiveSelectedIdx]);
 
   // Active file display name
   const activeDisplayFileName = useMemo(() => {
-    if (projectTestFiles && projectTestFiles.length > 0 && selectedTestFileIdx < projectTestFiles.length) {
-      return projectTestFiles[selectedTestFileIdx].filename;
+    if (projectTestFiles && projectTestFiles.length > 0 && effectiveSelectedIdx < projectTestFiles.length) {
+      return projectTestFiles[effectiveSelectedIdx].filename;
     }
     return getTestFileName(fileName, framework);
-  }, [fileName, framework, projectTestFiles, selectedTestFileIdx]);
+  }, [fileName, framework, projectTestFiles, effectiveSelectedIdx]);
 
   // Parse missing line string (e.g. "73, 74, 79, 132-140, 156") into Set<number>
   const missingLineSet = useMemo(() => {
@@ -394,9 +405,9 @@ const CodeViewer: React.FC<CodeViewerProps> = ({
               {projectTestFiles.map((file, idx) => (
                 <button
                   key={idx}
-                  onClick={() => setSelectedTestFileIdx(idx)}
+                  onClick={() => handleSelectFile(idx)}
                   className={`w-full px-2.5 py-1.5 rounded-xl text-left transition-all flex items-center justify-between text-[11px] font-mono ${
-                    selectedTestFileIdx === idx
+                    effectiveSelectedIdx === idx
                       ? 'bg-indigo-600/30 border border-indigo-500/50 text-white font-bold ring-1 ring-indigo-500/30'
                       : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200 border border-transparent'
                   }`}

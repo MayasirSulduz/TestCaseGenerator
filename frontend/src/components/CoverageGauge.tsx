@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { CheckCircle2, AlertCircle, RefreshCw, ShieldCheck, Activity, Target, Layers, Clock, Check, ChevronRight, Play, TrendingUp, Plus } from 'lucide-react';
+import { CheckCircle2, AlertCircle, RefreshCw, ShieldCheck, Activity, Target, Layers, Clock, Check, ChevronRight, Play, TrendingUp, Plus, FileCode } from 'lucide-react';
 import { toast } from 'sonner';
-import { TrialStep } from '../types';
+import { ProjectTestFile, TrialStep } from '../types';
 
 interface CoverageGaugeProps {
   coverage: number;
@@ -13,6 +13,9 @@ interface CoverageGaugeProps {
   isLoading?: boolean;
   trials?: TrialStep[];
   onIncreaseTarget?: (newTarget: number) => void;
+  projectTestFiles?: ProjectTestFile[];
+  selectedFileIdx?: number;
+  onSelectFileIdx?: (idx: number) => void;
 }
 
 export const CoverageGauge: React.FC<CoverageGaugeProps> = ({
@@ -23,7 +26,10 @@ export const CoverageGauge: React.FC<CoverageGaugeProps> = ({
   linesCoveredText,
   isLoading = false,
   trials = [],
-  onIncreaseTarget
+  onIncreaseTarget,
+  projectTestFiles = [],
+  selectedFileIdx = 0,
+  onSelectFileIdx
 }) => {
   const [activeTrialIndex, setActiveTrialIndex] = useState<number>(0);
   const [displayCoverage, setDisplayCoverage] = useState<number>(coverage);
@@ -41,6 +47,12 @@ export const CoverageGauge: React.FC<CoverageGaugeProps> = ({
       setActiveTrialIndex(0);
     }
   }, [coverage, trials]);
+
+  // Selected file for dedicated file coverage donut
+  const selectedFile = (projectTestFiles && projectTestFiles.length > 0)
+    ? (projectTestFiles[selectedFileIdx] || projectTestFiles.find(f => !f.isFixture) || projectTestFiles[0])
+    : null;
+  const selectedFileCov = selectedFile?.coverage ?? coverage;
 
   // Construct trial steps using real trials or real progress up to total coverage
   const rawTrials: TrialStep[] = trials.length > 0 ? trials : [
@@ -66,9 +78,13 @@ export const CoverageGauge: React.FC<CoverageGaugeProps> = ({
     ? activeTrials[activeTrialIndex] 
     : activeTrials[0];
 
-  const radius = 48;
+  const radius = 38;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (displayCoverage / 100) * circumference;
+
+  const fileRadius = 26;
+  const fileCircumference = 2 * Math.PI * fileRadius;
+  const fileOffset = fileCircumference - (selectedFileCov / 100) * fileCircumference;
 
   const isAchieved = displayCoverage >= targetCoverage;
 
@@ -116,64 +132,111 @@ export const CoverageGauge: React.FC<CoverageGaugeProps> = ({
         </span>
       </div>
 
-      {/* Main Animated Donut Gauge */}
+      {/* Main Animated Donut Gauges Row */}
       <div className="flex flex-col items-center justify-center gap-3 py-2 my-auto w-full relative">
-        <div className="relative flex items-center justify-center shrink-0">
-          <svg className="w-32 h-32 transform -rotate-90">
-            {/* Track Circle */}
-            <circle
-              cx="64"
-              cy="64"
-              r={radius}
-              className="stroke-slate-800/80"
-              strokeWidth="9"
-              fill="transparent"
-            />
-            {/* Progress Circle with smooth transition */}
-            <circle
-              cx="64"
-              cy="64"
-              r={radius}
-              stroke={isAchieved ? '#10b981' : displayCoverage > 50 ? '#6366f1' : '#f59e0b'}
-              strokeWidth="9"
-              strokeDasharray={circumference}
-              strokeDashoffset={strokeDashoffset}
-              strokeLinecap="round"
-              fill="transparent"
-              className="transition-all duration-1000 ease-out"
-            />
-          </svg>
+        <div className="flex items-center justify-center gap-4 sm:gap-6 w-full">
+          {/* 1. Whole Project Coverage Donut Gauge */}
+          <div className="flex flex-col items-center justify-center">
+            <div className="relative flex items-center justify-center shrink-0">
+              <svg className="w-28 h-28 transform -rotate-90">
+                {/* Track Circle */}
+                <circle
+                  cx="56"
+                  cy="56"
+                  r={radius}
+                  className="stroke-slate-800/80"
+                  strokeWidth="8"
+                  fill="transparent"
+                />
+                {/* Progress Circle with smooth transition */}
+                <circle
+                  cx="56"
+                  cy="56"
+                  r={radius}
+                  stroke={isAchieved ? '#10b981' : displayCoverage > 50 ? '#6366f1' : '#f59e0b'}
+                  strokeWidth="8"
+                  strokeDasharray={circumference}
+                  strokeDashoffset={strokeDashoffset}
+                  strokeLinecap="round"
+                  fill="transparent"
+                  className="transition-all duration-1000 ease-out"
+                />
+              </svg>
 
-          {/* Animated Percentage Inner Content */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
-              Coverage
-            </span>
-            <span className="text-2xl font-black font-mono tracking-tight bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-transparent transition-all duration-500">
-              {displayCoverage}%
-            </span>
+              {/* Animated Percentage Inner Content */}
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                <span className="text-[8px] font-bold uppercase tracking-wider text-slate-400">
+                  Whole
+                </span>
+                <span className="text-xl font-black font-mono tracking-tight bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-transparent transition-all duration-500">
+                  {displayCoverage}%
+                </span>
 
-            {/* Goal Label + Increase Target Symbol */}
-            <div className="flex items-center gap-1 mt-0.5">
-              <span className="text-[10px] text-slate-400 font-mono">
-                Goal: {targetCoverage}%
-              </span>
-              {onIncreaseTarget && (
-                <button
-                  onClick={handleBoostButtonClick}
-                  disabled={isLoading || isTrialsOver}
-                  title={isTrialsOver ? "3 trials got over" : "Increase coverage target & auto-repair tests"}
-                  className={`p-0.5 rounded-md border transition-all flex items-center justify-center ${
-                    isTrialsOver
-                      ? 'bg-slate-800/50 border-slate-700/50 text-slate-500 cursor-not-allowed opacity-60'
-                      : 'bg-indigo-500/20 hover:bg-indigo-500/40 border-indigo-500/40 text-indigo-300 hover:text-white transform hover:scale-110'
-                  }`}
-                >
-                  <TrendingUp className="h-2.5 w-2.5" />
-                </button>
-              )}
+                {/* Goal Label + Increase Target Symbol */}
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className="text-[9px] text-slate-400 font-mono">
+                    Goal: {targetCoverage}%
+                  </span>
+                  {onIncreaseTarget && (
+                    <button
+                      onClick={handleBoostButtonClick}
+                      disabled={isLoading || isTrialsOver}
+                      title={isTrialsOver ? "3 trials got over" : "Increase coverage target & auto-repair tests"}
+                      className={`p-0.5 rounded-md border transition-all flex items-center justify-center ${
+                        isTrialsOver
+                          ? 'bg-slate-800/50 border-slate-700/50 text-slate-500 cursor-not-allowed opacity-60'
+                          : 'bg-indigo-500/20 hover:bg-indigo-500/40 border-indigo-500/40 text-indigo-300 hover:text-white transform hover:scale-110'
+                      }`}
+                    >
+                      <TrendingUp className="h-2 w-2" />
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
+            <span className="text-[9px] font-mono font-bold text-slate-400 mt-1 uppercase tracking-wider">Whole Coverage</span>
           </div>
+
+          {/* 2. Selected File Coverage Small Donut Gauge (Beside Whole Coverage) */}
+          {selectedFile && (
+            <div className="flex flex-col items-center justify-center pl-4 sm:pl-6 border-l border-slate-800/80">
+              <div className="relative flex items-center justify-center shrink-0">
+                <svg className="w-20 h-20 transform -rotate-90">
+                  <circle
+                    cx="40"
+                    cy="40"
+                    r={fileRadius}
+                    className="stroke-slate-800/80"
+                    strokeWidth="6"
+                    fill="transparent"
+                  />
+                  <circle
+                    cx="40"
+                    cy="40"
+                    r={fileRadius}
+                    stroke={selectedFileCov >= targetCoverage ? '#10b981' : selectedFileCov > 50 ? '#6366f1' : '#f59e0b'}
+                    strokeWidth="6"
+                    strokeDasharray={fileCircumference}
+                    strokeDashoffset={fileOffset}
+                    strokeLinecap="round"
+                    fill="transparent"
+                    className="transition-all duration-1000 ease-out"
+                  />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                  <span className="text-[7px] font-bold uppercase tracking-wider text-indigo-400">
+                    File
+                  </span>
+                  <span className="text-sm font-black font-mono tracking-tight text-white">
+                    {selectedFileCov}%
+                  </span>
+                </div>
+              </div>
+              <span className="text-[9px] font-mono font-bold text-indigo-300 truncate max-w-[85px] mt-1" title={selectedFile.filename}>
+                {selectedFile.filename.split('/').pop()}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Target Boost Popover Menu */}
@@ -275,60 +338,46 @@ export const CoverageGauge: React.FC<CoverageGaugeProps> = ({
           <div className="p-2 bg-slate-950/90 border border-slate-800 rounded-xl text-[10px] font-mono text-indigo-300 mt-0.5 truncate">
             {currentTrial.note}
           </div>
-        </div>
 
-        {/* Metrics Grid */}
-        <div className="grid grid-cols-2 gap-2 w-full">
-          {/* Target Goal */}
-          <div className="p-2 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col gap-0.5">
-            <span className="text-[9px] font-medium text-slate-400 flex items-center gap-1">
-              <Target className="h-3 w-3 text-indigo-400" /> Target Goal
-            </span>
-            <span className="text-[11px] font-bold text-slate-200 font-mono">
-              {targetCoverage}% Target
-            </span>
-          </div>
-
-          {/* Line Coverage */}
-          <div className="p-2 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col gap-0.5">
-            <span className="text-[9px] font-medium text-slate-400 flex items-center gap-1">
-              <Layers className="h-3 w-3 text-cyan-400" /> Line Coverage
-            </span>
-            <span className="text-[11px] font-bold text-slate-200 font-mono">
-              {linesCoveredText || `${displayCoverage}% Covered`}
-            </span>
-          </div>
-
-          {/* Execution Status */}
-          <div className="p-2 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col gap-0.5">
-            <span className="text-[9px] font-medium text-slate-400 flex items-center gap-1">
-              <Activity className="h-3 w-3 text-emerald-400" /> Execution Status
-            </span>
-            <div className="flex items-center gap-1">
-              {isLoading ? (
-                <span className="text-amber-400 font-bold text-[11px] flex items-center gap-1">
-                  <RefreshCw className="h-3 w-3 animate-spin" /> Executing
-                </span>
-              ) : displayCoverage >= targetCoverage ? (
-                <span className="text-emerald-400 font-bold text-[11px] flex items-center gap-1">
-                  <CheckCircle2 className="h-3 w-3" /> Passing
-                </span>
-              ) : (
-                <span className="text-amber-400 font-bold text-[11px] flex items-center gap-1">
-                  <AlertCircle className="h-3 w-3" /> Refining
-                </span>
-              )}
+          {/* 4 Summary Metric Cards Grid (Target Goal, Line Coverage, Execution Status, Execution Time) */}
+          <div className="grid grid-cols-2 gap-2 my-1.5 w-full font-mono text-[10px]">
+            {/* Target Goal */}
+            <div className="p-2 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col justify-between gap-0.5">
+              <span className="text-slate-400 font-bold flex items-center gap-1.5 text-[9px]">
+                <Target className="h-3 w-3 text-indigo-400" /> Target Goal
+              </span>
+              <span className="text-slate-100 font-extrabold text-xs">{targetCoverage}% Target</span>
             </div>
-          </div>
 
-          {/* Time Badge beside Execution Status */}
-          <div className="p-2 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col gap-0.5">
-            <span className="text-[9px] font-medium text-slate-400 flex items-center gap-1">
-              <Clock className="h-3 w-3 text-sky-400" /> Execution Time
-            </span>
-            <span className="text-[11px] font-bold text-sky-300 font-mono">
-              ⏱️ {executionTimeSec ? `${executionTimeSec}s` : '6.9s'}
-            </span>
+            {/* Line Coverage */}
+            <div className="p-2 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col justify-between gap-0.5">
+              <span className="text-slate-400 font-bold flex items-center gap-1.5 text-[9px]">
+                <Layers className="h-3 w-3 text-cyan-400" /> Line Coverage
+              </span>
+              <span className="text-slate-100 font-extrabold text-xs">{displayCoverage}% Covered</span>
+            </div>
+
+            {/* Execution Status */}
+            <div className="p-2 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col justify-between gap-0.5">
+              <span className="text-slate-400 font-bold flex items-center gap-1.5 text-[9px]">
+                <Activity className="h-3 w-3 text-emerald-400" /> Execution Status
+              </span>
+              <span className={`font-extrabold text-xs flex items-center gap-1 ${
+                testPassed || displayCoverage >= targetCoverage ? 'text-emerald-400' : 'text-amber-400'
+              }`}>
+                <CheckCircle2 className="h-3 w-3 text-emerald-400" /> {testPassed || displayCoverage >= targetCoverage ? 'Passing' : 'Refining'}
+              </span>
+            </div>
+
+            {/* Execution Time */}
+            <div className="p-2 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col justify-between gap-0.5">
+              <span className="text-slate-400 font-bold flex items-center gap-1.5 text-[9px]">
+                <Clock className="h-3 w-3 text-sky-400" /> Execution Time
+              </span>
+              <span className="text-slate-100 font-extrabold text-xs flex items-center gap-1">
+                ⏱️ {executionTimeSec || '0.0'}s
+              </span>
+            </div>
           </div>
         </div>
       </div>

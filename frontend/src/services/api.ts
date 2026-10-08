@@ -16,15 +16,28 @@ const api = axios.create({
   }
 });
 
+type ConnectionListener = (connected: boolean, healthInfo?: HealthCheckResult) => void;
+const connectionListeners = new Set<ConnectionListener>();
+
+export const subscribeConnectionStatus = (listener: ConnectionListener) => {
+  connectionListeners.add(listener);
+  return () => {
+    connectionListeners.delete(listener);
+  };
+};
+
+export const notifyConnectionStatus = (connected: boolean, healthInfo?: HealthCheckResult) => {
+  connectionListeners.forEach((fn) => fn(connected, healthInfo));
+};
+
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    notifyConnectionStatus(true);
+    return response;
+  },
   (error) => {
     if (error.response) {
-      console.error('API Error Response:', error.response.data);
-    } else if (error.request) {
-      console.error('API No Response:', error.request);
-    } else {
-      console.error('API Request Error:', error.message);
+      notifyConnectionStatus(true);
     }
     return Promise.reject(error);
   }
@@ -32,10 +45,12 @@ api.interceptors.response.use(
 
 export const checkHealth = async (): Promise<HealthCheckResult> => {
   try {
-    const response = await axios.get<HealthCheckResult>(`${API_BASE_URL}/api/health`, { timeout: 3000 });
+    const response = await axios.get<HealthCheckResult>(`${API_BASE_URL}/api/health`, { timeout: 10000 });
+    notifyConnectionStatus(true, response.data);
     return response.data;
   } catch (error) {
     console.error('Health check failed:', error);
+    notifyConnectionStatus(false);
     throw error;
   }
 };
@@ -90,93 +105,91 @@ export const generateTestsStream = async (
   existingTests?: string,
   targetMissingLines?: string
 ): Promise<GenerateTestsResult> => {
-  const url = `${API_BASE_URL}/api/generate-tests-stream`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, language, framework, coverageTarget, filename, existingTests, targetMissingLines })
-  });
+  try {
+    const url = `${API_BASE_URL}/api/generate-tests-stream`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, language, framework, coverageTarget, filename, existingTests, targetMissingLines })
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Stream request failed (${response.status}): ${errorText}`);
-  }
+    if (!response.ok) {
+      console.warn(`Stream request failed with status ${response.status}. Falling back to standard API...`);
+      return await generateTests(code, language, framework, coverageTarget, filename);
+    }
 
-  const reader = response.body?.getReader();
-  if (!reader) {
-    throw new Error('ReadableStream not supported by browser environment.');
-  }
+    const reader = response.body?.getReader();
+    if (!reader) {
+      return await generateTests(code, language, framework, coverageTarget, filename);
+    }
 
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let finalResult: GenerateTestsResult | null = null;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult: GenerateTestsResult | null = null;
+    let eventType = '';
+    let dataLines: string[] = [];
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split('\n\n');
-    buffer = chunks.pop() ?? ''; // keep trailing buffer
-
-    for (const chunk of chunks) {
-      if (!chunk.trim()) continue;
-      let eventType = 'message';
-      let dataStr = '';
-
-      for (const line of chunk.split('\n')) {
-        if (line.startsWith('event:')) {
-          eventType = line.replace('event:', '').trim();
-        } else if (line.startsWith('data:')) {
-          dataStr = line.replace('data:', '').trim();
-        }
-      }
-
-      if (dataStr) {
-        try {
-          const parsed = JSON.parse(dataStr);
-          if (eventType === 'log') {
-            onLog?.(parsed.tag, parsed.text);
-          } else if (eventType === 'trial') {
-            onTrial?.(parsed);
-          } else if (eventType === 'done' || eventType === 'result') {
-            finalResult = parsed;
-          } else if (eventType === 'error') {
-            throw new Error(parsed.message || 'Stream server error');
+    const processLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(':')) {
+        if (dataLines.length > 0) {
+          const fullDataStr = dataLines.join('\n');
+          try {
+            const parsed = JSON.parse(fullDataStr);
+            if (eventType === 'log') {
+              onLog?.(parsed.tag, parsed.text);
+            } else if (eventType === 'trial') {
+              onTrial?.(parsed);
+            } else if (eventType === 'done' || eventType === 'result') {
+              finalResult = parsed;
+            } else if (eventType === 'error') {
+              throw new Error(parsed.message || 'Stream server error');
+            }
+          } catch (e: any) {
+            if (eventType === 'error') throw e;
           }
-        } catch (e: any) {
-          if (eventType === 'error') throw e;
         }
+        eventType = '';
+        dataLines = [];
+        return;
       }
-    }
-  }
 
-  // Check remaining trailing buffer if stream ended
-  if (!finalResult && buffer.trim()) {
-    let eventType = 'message';
-    let dataStr = '';
-    for (const line of buffer.split('\n')) {
       if (line.startsWith('event:')) {
-        eventType = line.replace('event:', '').trim();
+        eventType = line.slice(6).trim();
       } else if (line.startsWith('data:')) {
-        dataStr = line.replace('data:', '').trim();
+        dataLines.push(line.slice(5).trim());
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? ''; // keep trailing line snippet
+
+      for (const line of lines) {
+        processLine(line);
       }
     }
-    if (dataStr) {
-      try {
-        const parsed = JSON.parse(dataStr);
-        if (eventType === 'done' || eventType === 'result') {
-          finalResult = parsed;
-        }
-      } catch (e) {}
+
+    // Process any remaining trailing buffer lines
+    if (buffer) {
+      processLine(buffer);
+      processLine(''); // flush last event
     }
-  }
 
-  if (!finalResult) {
-    throw new Error('Stream ended without returning complete test generation response');
-  }
+    if (!finalResult) {
+      console.warn('SSE stream completed without finalResult payload. Falling back to standard POST API...');
+      return await generateTests(code, language, framework, coverageTarget, filename);
+    }
 
-  return finalResult;
+    return finalResult;
+  } catch (error: any) {
+    console.warn('Stream processing encountered error:', error?.message, '--> Triggering standard API fallback...');
+    return await generateTests(code, language, framework, coverageTarget, filename);
+  }
 };
 
 export const fixTests = async (

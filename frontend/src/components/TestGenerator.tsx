@@ -47,6 +47,7 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
   const [liveExecutionTime, setLiveExecutionTime] = useState<string>('0.0');
   const [zipEntries, setZipEntries] = useState<ExtractedZipEntry[]>([]);
   const [activeZipFilename, setActiveZipFilename] = useState<string>('');
+  const [selectedFileIdx, setSelectedFileIdx] = useState<number>(0);
 
   const addLog = (tag: LogEntry['tag'], text: string) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -589,6 +590,8 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
                     onGenerateTargetedLines={handleGenerateTargetedLines}
                     projectTestFiles={coverageReport?.projectTestFiles}
                     isZipUpload={zipEntries.length > 0}
+                    selectedFileIdx={selectedFileIdx}
+                    onSelectFileIdx={setSelectedFileIdx}
                   />
                 </div>
 
@@ -602,6 +605,9 @@ const TestGenerator: React.FC<TestGeneratorProps> = ({ sidebarOpen = true, setSi
                     isLoading={loading}
                     trials={coverageReport?.trials}
                     onIncreaseTarget={handleIncreaseTarget}
+                    projectTestFiles={coverageReport?.projectTestFiles}
+                    selectedFileIdx={selectedFileIdx}
+                    onSelectFileIdx={setSelectedFileIdx}
                   />
                 </div>
               </div>

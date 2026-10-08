@@ -5,6 +5,14 @@ import { checkRuntimeEnvironment } from './utils/systemEnv';
 const app = createApp();
 const port = envConfig.port;
 
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ [SERVER SURVIVAL] Caught uncaughtException:', err?.message || err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ [SERVER SURVIVAL] Caught unhandledRejection:', reason);
+});
+
 if (!process.env.VERCEL) {
   console.log('\n' + '='.repeat(60));
   console.log('Node.js TypeScript Server Starting - Multi-Language Test Generator');
@@ -25,9 +33,12 @@ if (!process.env.VERCEL) {
   console.log('\nSupported Languages: Python, JavaScript, TypeScript, Java');
   console.log('='.repeat(60) + '\n');
 
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log(`🚀 Server successfully listening on http://localhost:${port}`);
   });
+
+  server.keepAliveTimeout = 120000;
+  server.headersTimeout = 125000;
 }
 
 export default app;

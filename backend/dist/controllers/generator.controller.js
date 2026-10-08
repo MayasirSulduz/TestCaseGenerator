@@ -36,17 +36,41 @@ async function handleGenerateTests(req, res) {
 }
 async function handleGenerateTestsStream(req, res) {
     res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
+    let isClientConnected = true;
+    req.on('close', () => {
+        isClientConnected = false;
+    });
+    const heartbeatInterval = setInterval(() => {
+        if (!isClientConnected || res.writableEnded || res.destroyed) {
+            clearInterval(heartbeatInterval);
+            return;
+        }
+        try {
+            res.write(': heartbeat\n\n');
+        }
+        catch { }
+    }, 15000);
     const sendEvent = (event, data) => {
-        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        if (!isClientConnected || res.writableEnded || res.destroyed)
+            return;
+        try {
+            res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        }
+        catch (e) {
+            console.error('SSE sendEvent error:', e);
+        }
     };
     try {
         const dto = req.body || {};
         if (!dto.code || !dto.code.trim()) {
             sendEvent('error', { message: 'No source code provided' });
-            res.end();
+            clearInterval(heartbeatInterval);
+            if (!res.writableEnded)
+                res.end();
             return;
         }
         const onLog = (tag, text) => {
@@ -58,12 +82,16 @@ async function handleGenerateTestsStream(req, res) {
         const result = await (0, generator_service_1.generateTestsWithCoverage)(dto, onLog, onTrial);
         sendEvent('done', result);
         sendEvent('result', result);
-        res.end();
+        clearInterval(heartbeatInterval);
+        if (!res.writableEnded)
+            res.end();
     }
     catch (error) {
         console.error('Error in handleGenerateTestsStream:', error);
         sendEvent('error', { message: error?.message || 'Internal Server Error' });
-        res.end();
+        clearInterval(heartbeatInterval);
+        if (!res.writableEnded)
+            res.end();
     }
 }
 function handleDetectFramework(req, res) {

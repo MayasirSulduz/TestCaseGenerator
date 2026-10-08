@@ -13,7 +13,7 @@ import {
   Zap
 } from 'lucide-react';
 import TestGenerator from './components/TestGenerator';
-import { checkHealth } from './services/api';
+import { checkHealth, subscribeConnectionStatus } from './services/api';
 import { HealthCheckResult } from './types';
 
 const App: React.FC = () => {
@@ -23,6 +23,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
     checkBackendHealth();
+    const unsubscribe = subscribeConnectionStatus((connected, health) => {
+      if (connected) {
+        setBackendStatus('connected');
+        if (health) setHealthInfo(health);
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   const checkBackendHealth = async () => {
